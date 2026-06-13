@@ -1,0 +1,37 @@
+[tool.pytest.ini_options]
+testpaths = ["tests", "packages/python/audio_metadata_normalizer/tests"]
+pythonpath = ["packages/python"]
+addopts = "-m 'not slow and not e2e and not network'"
+markers = [
+  "unit: fast unit tests without external processes where possible",
+  "integration: tests that execute scripts or external local tools",
+  "e2e: full end-to-end scenarios, usually slower",
+  "media: tests that generate or process media files with ffmpeg",
+  "slow: tests that are intentionally slower and excluded from the default run",
+  "network: tests that require real network access; should normally be mocked",
+  "linux: tests intended for Linux environments",
+  "windows: tests intended for Windows environments",
+  "powershell: tests that run PowerShell or Pester",
+]
+
+[tool.ruff]
+line-length = 100
+exclude = [
+  ".git",
+  ".venv",
+  "venv",
+  "env",
+  "__pycache__",
+  ".pytest_cache",
+  "archive",
+  "samples",
+]
+
+[[tool.mypy.overrides]]
+module = [
+  "discogs_client",
+  "jsonschema",
+  "musicbrainzngs",
+  "shazamio",
+]
+ignore_missing_imports = true

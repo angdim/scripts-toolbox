@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.venv
+venv/
+env/
+
+# IDE/editor
+.idea/
+.vscode/
+
+# Logs/temp/backups
+*.log
+*.tmp
+*.bak
+!archive/**/*.bak
+
+# Generated/local media and project outputs
+samples/**/*.flac
+samples/**/*.wav
+samples/**/*.mp3
+samples/**/*.mp4
+samples/**/*.mkv
+samples/**/*.mov
+samples/**/*.jpg
+samples/**/*.jpeg
+samples/**/*.png
+tools/**/output/
+tools/**/preview/
+tools/**/videos/
+tools/**/*.mp4
+tools/**/*.mkv
+tools/**/*.mov
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,7 @@
+ffmpeg -i "Genesis 001.m4a" -af "highpass=f=80,equalizer=f=2500:g=5:width=800:width_type=h,acompressor=threshold=-20dB:ratio=3:makeup=4dB,loudnorm" -b:a 192k "Genesis 001.mp3"
+
+
+ffmpeg -i "Genesis 001.m4a" \
+  -af "highpass=f=100,lowpass=f=8000,equalizer=f=2500:g=6:width=1500:width_type=h,equalizer=f=4000:g=4:width=1000:width_type=h,acompressor=threshold=-25dB:ratio=4:attack=5:release=50:makeup=8dB,loudnorm=I=-16:TP=-1.5:LRA=11" \
+  -b:a 128k -codec:a libmp3lame \
+  -y "Genesis 001.mp3"

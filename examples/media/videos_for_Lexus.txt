@@ -1,0 +1,102 @@
+ffmpeg -i input.mp4 \
+  -c:v libx264 -profile:v baseline -level 3.1 \
+  -vf "scale='min(720,iw)':min(480,ih):force_original_aspect_ratio=decrease" \
+  -b:v 1500k -maxrate 2000k -bufsize 4000k \
+  -c:a aac -b:a 192k \
+  -movflags +faststart \
+  output.mp4
+
+
+############################################
+Анаморфна команда, която запазва пропорцията
+на видеото при Лексус ИнфоТейнмънт системите
+
+ffmpeg -i input.mp4 \
+  -c:v libx264 -profile:v baseline -level 3.1 \
+  -vf "scale=640:480:force_original_aspect_ratio=decrease:flags=lanczos" \
+  -aspect 16:9 \
+  -b:v 1500k -maxrate 2000k -bufsize 4000k \
+  -c:a aac -b:a 192k \
+  -movflags +faststart \
+  output_anamorphic.mp4
+  
+#############################################
+Letterbox команда, добавяща черни ленти отгоре и отдолу,
+за да се запази оргиналната ширина без разтягане по вертикал
+
+ffmpeg -i input.mp4 \
+  -c:v libx264 -profile:v baseline -level 3.1 \
+  -vf "scale=720:-2:force_original_aspect_ratio=decrease:flags=lanczos,pad=720:480:(ow-iw)/2:(oh-ih)/2:black,setsar=1:1" \
+  -b:v 1500k -maxrate 2000k -bufsize 4000k \
+  -c:a aac -b:a 192k \
+  -movflags +faststart \
+  output_letterbox.mp4
+  
+#######################################################
+Универсална команда с автоматично разпознаване
+
+ffmpeg -i input.mp4 \
+  -c:v libx264 -profile:v baseline -level 3.1 \
+  -vf "scale='if(gte(iw/ih,16/9),640,trunc(480*16/9/2)*2)':'if(gte(iw/ih,16/9),trunc(640*9/16/2)*2,480)',setsar=1:1" \
+  -aspect 16:9 \
+  -b:v 1500k -maxrate 2000k -bufsize 4000k \
+  -c:a aac -b:a 192k \
+  -movflags +faststart \
+  output.mp4
+  
+
+  
+===========================================================
+
+Видео спецификации:
+Поддържани формати:
+
+MP4, WMV, AVI (само тези три контейнера)
+
+Разделителна способност:
+Системата поддържа следните резолюции:
+
+128x96
+160x120
+176x144 (QCIF)
+320x240 (QVGA)
+352x240 (SIF)
+352x288 (CIF)
+640x480 (VGA)
+720x480 (NTSC) - препоръчителна
+720x576 (PAL) - препоръчителна
+
+⚠️ ВАЖНО: Максималната разделителна способност е 720p. Файлове с 1080p ще възпроизвеждат само звука, без видео!
+Видео кодеци:
+Въпреки че точните кодеци не са изрично документирани, въз основа на поддържаните формати най-вероятно са:
+
+H.264/AVC (MPEG-4 Part 10) - най-добрият избор
+MPEG-4 Part 2 (за AVI/MP4)
+WMV9 (за WMV файлове)
+
+Аудио спецификации:
+Поддържани аудио формати:
+
+AAC (.m4a) - препоръчителен
+MP3 (.mp3)
+WMA (.wma) - Ver. 7, 8, 9
+
+Параметри за AAC:
+
+Честота на дискретизация: 32, 44.1, 48 kHz
+Битрейт: 48-320 kbps (CBR)
+
+Параметри за MP3:
+
+MPEG1: 32, 44.1, 48 kHz
+MPEG2: 16, 22.05, 24 kHz
+Битрейт: 32-320 kbps (VBR поддържан)
+Препоръчва се: минимум 128 kbps при 44.1 kHz
+
+USB изисквания:
+
+Формат: FAT32 (задължително!)
+USB стандарт: USB 2.0 HS (480 Mbps)
+Официален лимит: 32GB
+Практически лимит: До 256GB ако е форматиран като FAT32
+Максимален размер на файл: 2GB

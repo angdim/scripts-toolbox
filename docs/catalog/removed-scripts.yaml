@@ -1,0 +1,12 @@
+# Архив на изтрити/заменени скриптове.
+# Поддържа се ръчно, защото автоматичният каталог не може да знае причината за изтриване.
+#
+# Формат:
+# removed:
+#   - command: old_command
+#     path: tools/category/old_script.py
+#     removed_at: 2026-06-13
+#     replacement: new_command
+#     reason: Кратка причина за премахване.
+#     purpose: Какво е правил изтритият скрипт.
+removed: []

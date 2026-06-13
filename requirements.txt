@@ -1,0 +1,6 @@
+# Shared optional dependencies for tools that need external Python packages.
+# Many scripts use only the standard library and external CLI tools such as ffmpeg.
+
+discogs-client
+musicbrainzngs
+rapidfuzz

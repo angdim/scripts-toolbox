@@ -1,0 +1,614 @@
+{
+  "repo_root": ".",
+  "active": [
+    {
+      "command": "Install-ToPath",
+      "path": "bootstrap/windows/Install-ToPath.ps1",
+      "category": "bootstrap",
+      "topic": "bootstrap",
+      "technology": "PowerShell",
+      "platform": "Windows",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Инсталира scripts-toolbox командите в Windows чрез .cmd wrapper-и.",
+      "help_command": "Install-ToPath -Help",
+      "markers": [
+        "Сканира repo-то за файлове с marker \"scripts-toolbox: entrypoint\" и създава",
+        "$EntryPointMarker = \"scripts-toolbox: entrypoint\"",
+        "$NoPathMarker = \"scripts-toolbox: no-path\""
+      ]
+    },
+    {
+      "command": "scripts-catalog",
+      "path": "tools/catalog/python/scripts_catalog.py",
+      "category": "catalog",
+      "topic": "catalog",
+      "technology": "Python",
+      "platform": "Cross-platform/Python",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Енциклопедичен каталог за scripts-toolbox.",
+      "help_command": "scripts-catalog --help",
+      "markers": [
+        "scripts-toolbox: entrypoint",
+        "scripts-toolbox: command=scripts-catalog",
+        "NTRYPOINT_MARKER = \"scripts-toolbox: entrypoint\"",
+        "NO_PATH_MARKER = \"scripts-toolbox: no-path\"",
+        "COMMAND_RE = re.compile(r\"^\\s*(?:#|REM)\\s*scripts-toolbox:\\s*command=([A-Za-z0-9._-]+)\\s*$\", re.I)"
+      ]
+    },
+    {
+      "command": "DuplicateFinder-Win10",
+      "path": "tools/files/duplicates/powershell/DuplicateFinder-Win10.ps1",
+      "category": "files/duplicates",
+      "topic": "files",
+      "technology": "PowerShell",
+      "platform": "Cross-platform PowerShell",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Търси дублирани файлове в един или повече Windows пътища.",
+      "help_command": "DuplicateFinder-Win10 -Help",
+      "markers": [
+        "scripts-toolbox: entrypoint"
+      ]
+    },
+    {
+      "command": "Find-Duplicates",
+      "path": "tools/files/duplicates/powershell/Find-Duplicates.ps1",
+      "category": "files/duplicates",
+      "topic": "files",
+      "technology": "PowerShell",
+      "platform": "Cross-platform PowerShell",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Търси дублирани файлове в един или повече Windows пътища.",
+      "help_command": "Find-Duplicates -Help",
+      "markers": [
+        "scripts-toolbox: entrypoint"
+      ]
+    },
+    {
+      "command": "Ultimate-Duplicate-Finder",
+      "path": "tools/files/duplicates/powershell/Ultimate-Duplicate-Finder.ps1",
+      "category": "files/duplicates",
+      "topic": "files",
+      "technology": "PowerShell",
+      "platform": "Cross-platform PowerShell",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Търси дублирани файлове в един или повече Windows пътища.",
+      "help_command": "Ultimate-Duplicate-Finder -Help",
+      "markers": [
+        "scripts-toolbox: entrypoint"
+      ]
+    },
+    {
+      "command": "Ultimate-DuplicateFinder-Win10",
+      "path": "tools/files/duplicates/powershell/Ultimate-DuplicateFinder-Win10.ps1",
+      "category": "files/duplicates",
+      "topic": "files",
+      "technology": "PowerShell",
+      "platform": "Cross-platform PowerShell",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Търси дублирани файлове в един или повече Windows пътища.",
+      "help_command": "Ultimate-DuplicateFinder-Win10 -Help",
+      "markers": [
+        "scripts-toolbox: entrypoint"
+      ]
+    },
+    {
+      "command": "advanced_duplicate_finder",
+      "path": "tools/files/duplicates/bash/advanced_duplicate_finder.sh",
+      "category": "files/duplicates",
+      "topic": "files",
+      "technology": "Bash",
+      "platform": "Linux/Unix",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Няма извлечено описание. Стартирай help командата за повече информация.",
+      "help_command": "advanced_duplicate_finder --help",
+      "markers": [
+        "scripts-toolbox: entrypoint"
+      ]
+    },
+    {
+      "command": "deep_duplicate_scan",
+      "path": "tools/files/duplicates/bash/deep_duplicate_scan.sh",
+      "category": "files/duplicates",
+      "topic": "files",
+      "technology": "Bash",
+      "platform": "Linux/Unix",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Няма извлечено описание. Стартирай help командата за повече информация.",
+      "help_command": "deep_duplicate_scan --help",
+      "markers": [
+        "scripts-toolbox: entrypoint"
+      ]
+    },
+    {
+      "command": "find_duplicates",
+      "path": "tools/files/duplicates/bash/find_duplicates.sh",
+      "category": "files/duplicates",
+      "topic": "files",
+      "technology": "Bash",
+      "platform": "Linux/Unix",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "търси дублирани файлове в два зададени дяла/директории чрез SHA256 хешове.",
+      "help_command": "find_duplicates --help",
+      "markers": [
+        "scripts-toolbox: entrypoint"
+      ]
+    },
+    {
+      "command": "ultimate_duplicate_finder",
+      "path": "tools/files/duplicates/bash/ultimate_duplicate_finder.sh",
+      "category": "files/duplicates",
+      "topic": "files",
+      "technology": "Bash",
+      "platform": "Linux/Unix",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Няма извлечено описание. Стартирай help командата за повече информация.",
+      "help_command": "ultimate_duplicate_finder --help",
+      "markers": [
+        "scripts-toolbox: entrypoint"
+      ]
+    },
+    {
+      "command": "ultimate_duplicate_finder_improved",
+      "path": "tools/files/duplicates/bash/ultimate_duplicate_finder_improved.sh",
+      "category": "files/duplicates",
+      "topic": "files",
+      "technology": "Bash",
+      "platform": "Linux/Unix",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Няма извлечено описание. Стартирай help командата за повече информация.",
+      "help_command": "ultimate_duplicate_finder_improved --help",
+      "markers": [
+        "scripts-toolbox: entrypoint"
+      ]
+    },
+    {
+      "command": "normalize_all_names",
+      "path": "tools/files/names/bash/normalize_all_names.sh",
+      "category": "files/names",
+      "topic": "files",
+      "technology": "Bash",
+      "platform": "Linux/Unix",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "нормализира имената на файлове и директории според normalize.conf.",
+      "help_command": "normalize_all_names --help",
+      "markers": [
+        "scripts-toolbox: entrypoint"
+      ]
+    },
+    {
+      "command": "normalize_dir_names",
+      "path": "tools/files/names/bash/normalize_dir_names.sh",
+      "category": "files/names",
+      "topic": "files",
+      "technology": "Bash",
+      "platform": "Linux/Unix",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "нормализира имената на директории според normalize.conf.",
+      "help_command": "normalize_dir_names --help",
+      "markers": [
+        "scripts-toolbox: entrypoint"
+      ]
+    },
+    {
+      "command": "normalize_file_names",
+      "path": "tools/files/names/bash/normalize_file_names.sh",
+      "category": "files/names",
+      "topic": "files",
+      "technology": "Bash",
+      "platform": "Linux/Unix",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "нормализира имената на файлове според normalize.conf.",
+      "help_command": "normalize_file_names --help",
+      "markers": [
+        "scripts-toolbox: entrypoint"
+      ]
+    },
+    {
+      "command": "albumtool",
+      "path": "tools/media/audio/python/albumtool.py",
+      "category": "media/audio",
+      "topic": "media",
+      "technology": "Python",
+      "platform": "Cross-platform/Python",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Инструмент за разпознаване, преименуване, тагване и chapter обработка на аудио албуми.",
+      "help_command": "albumtool --help",
+      "markers": [
+        "scripts-toolbox: entrypoint"
+      ]
+    },
+    {
+      "command": "audio_peak_eq",
+      "path": "tools/media/audio/python/audio_peak_eq.py",
+      "category": "media/audio",
+      "topic": "media",
+      "technology": "Python",
+      "platform": "Cross-platform/Python",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Инструмент за Linux за channel balance, peak-базирано усилване и EQ обработка чрез FFmpeg филтри.",
+      "help_command": "audio_peak_eq --help",
+      "markers": [
+        "scripts-toolbox: entrypoint"
+      ]
+    },
+    {
+      "command": "convert_to_mp3",
+      "path": "tools/media/audio/bash/convert_to_mp3.sh",
+      "category": "media/audio",
+      "topic": "media",
+      "technology": "Bash",
+      "platform": "Linux/Unix",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Няма извлечено описание. Стартирай help командата за повече информация.",
+      "help_command": "convert_to_mp3 --help",
+      "markers": [
+        "scripts-toolbox: entrypoint"
+      ]
+    },
+    {
+      "command": "generate_playlist",
+      "path": "tools/media/audio/bash/generate_playlist.sh",
+      "category": "media/audio",
+      "topic": "media",
+      "technology": "Bash",
+      "platform": "Linux/Unix",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Няма извлечено описание. Стартирай help командата за повече информация.",
+      "help_command": "generate_playlist --help",
+      "markers": [
+        "scripts-toolbox: entrypoint"
+      ]
+    },
+    {
+      "command": "m4a2mp3_converter",
+      "path": "tools/media/audio/python/m4a2mp3_converter.py",
+      "category": "media/audio",
+      "topic": "media",
+      "technology": "Python",
+      "platform": "Cross-platform/Python",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "M4A към MP3 конвертор с аудио обработка чрез FFmpeg.",
+      "help_command": "m4a2mp3_converter --help",
+      "markers": [
+        "scripts-toolbox: entrypoint"
+      ]
+    },
+    {
+      "command": "split_by_silence",
+      "path": "tools/media/audio/python/split_by_silence.py",
+      "category": "media/audio",
+      "topic": "media",
+      "technology": "Python",
+      "platform": "Cross-platform/Python",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Автоматично разделя audio/video файл на отделни тракове според паузи/тишина.",
+      "help_command": "split_by_silence --help",
+      "markers": [
+        "scripts-toolbox: entrypoint"
+      ]
+    },
+    {
+      "command": "song_recognize",
+      "path": "tools/media/speech/python/song_recognize.py",
+      "category": "media/speech",
+      "topic": "media",
+      "technology": "Python",
+      "platform": "Cross-platform/Python",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Автоматично разпознава аудио файлове чрез Shazam API и ги копира с разпознати имена.",
+      "help_command": "song_recognize --help",
+      "markers": [
+        "scripts-toolbox: entrypoint"
+      ]
+    },
+    {
+      "command": "split_by_speaker_bat",
+      "path": "tools/media/speech/windows/split_by_speaker.bat",
+      "category": "media/speech",
+      "topic": "media",
+      "technology": "Batch/CMD",
+      "platform": "Windows",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "изрязва видео сегменти по говорители според transcript timestamp-и.",
+      "help_command": "split_by_speaker_bat /?",
+      "markers": [
+        "scripts-toolbox: entrypoint",
+        "scripts-toolbox: command=split_by_speaker_bat"
+      ]
+    },
+    {
+      "command": "split_recognize",
+      "path": "tools/media/speech/python/split_recognize.py",
+      "category": "media/speech",
+      "topic": "media",
+      "technology": "Python",
+      "platform": "Cross-platform/Python",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Автоматично разделя аудио/видео файл на отделни тракове базирано на паузи/тишина.",
+      "help_command": "split_recognize --help",
+      "markers": [
+        "scripts-toolbox: entrypoint"
+      ]
+    },
+    {
+      "command": "split_video_by_speaker",
+      "path": "tools/media/speech/python/split_video_by_speaker.py",
+      "category": "media/speech",
+      "topic": "media",
+      "technology": "Python",
+      "platform": "Cross-platform/Python",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Изрязва видео сегменти по говорители въз основа на transcript файл с timestamp-и.",
+      "help_command": "split_video_by_speaker --help",
+      "markers": [
+        "scripts-toolbox: entrypoint"
+      ]
+    },
+    {
+      "command": "split_video_by_speaker_sh",
+      "path": "tools/media/speech/bash/split_video_by_speaker.sh",
+      "category": "media/speech",
+      "topic": "media",
+      "technology": "Bash",
+      "platform": "Linux/Unix",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "изрязва video сегменти по говорители според transcript timestamp-и.",
+      "help_command": "split_video_by_speaker_sh --help",
+      "markers": [
+        "scripts-toolbox: entrypoint",
+        "scripts-toolbox: command=split_video_by_speaker_sh"
+      ]
+    },
+    {
+      "command": "split_media_by_time",
+      "path": "tools/media/video/python/split_media_by_time.py",
+      "category": "media/video",
+      "topic": "media",
+      "technology": "Python",
+      "platform": "Cross-platform/Python",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Разделя audio/video файл на последователни части с фиксирана продължителност и малко припокриване.",
+      "help_command": "split_media_by_time --help",
+      "markers": [
+        "scripts-toolbox: entrypoint"
+      ]
+    },
+    {
+      "command": "split_media_by_time_sh",
+      "path": "tools/media/video/bash/split_media_by_time.sh",
+      "category": "media/video",
+      "topic": "media",
+      "technology": "Bash",
+      "platform": "Linux/Unix",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "разделя audio/video файл на части с фиксирана продължителност и overlap.",
+      "help_command": "split_media_by_time_sh --help",
+      "markers": [
+        "scripts-toolbox: entrypoint",
+        "scripts-toolbox: command=split_media_by_time_sh"
+      ]
+    },
+    {
+      "command": "video4lexus",
+      "path": "tools/media/video/python/video4lexus.py",
+      "category": "media/video",
+      "topic": "media",
+      "technology": "Python",
+      "platform": "Cross-platform/Python",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Конвертира видео към формат и ограничения, подходящи за Lexus infotainment системи.",
+      "help_command": "video4lexus --help",
+      "markers": [
+        "scripts-toolbox: entrypoint"
+      ]
+    },
+    {
+      "command": "video4lexus_sh",
+      "path": "tools/media/video/bash/video4lexus.sh",
+      "category": "media/video",
+      "topic": "media",
+      "technology": "Bash",
+      "platform": "Linux/Unix",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "конвертира video файлове към ограничения, подходящи за Lexus infotainment системи.",
+      "help_command": "video4lexus_sh --help",
+      "markers": [
+        "scripts-toolbox: entrypoint",
+        "scripts-toolbox: command=video4lexus_sh"
+      ]
+    },
+    {
+      "command": "video4lexus_v2",
+      "path": "tools/media/video/python/video4lexus_v2.py",
+      "category": "media/video",
+      "topic": "media",
+      "technology": "Python",
+      "platform": "Cross-platform/Python",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Втора версия на video4lexus конвертор с FFmpeg профил за Lexus infotainment системи.",
+      "help_command": "video4lexus_v2 --help",
+      "markers": [
+        "scripts-toolbox: entrypoint"
+      ]
+    },
+    {
+      "command": "video4lexus_v3",
+      "path": "tools/media/video/python/video4lexus_v3.py",
+      "category": "media/video",
+      "topic": "media",
+      "technology": "Python",
+      "platform": "Cross-platform/Python",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Трета версия на video4lexus конвертор с допълнителни проверки и автоматични корекции.",
+      "help_command": "video4lexus_v3 --help",
+      "markers": [
+        "scripts-toolbox: entrypoint"
+      ]
+    },
+    {
+      "command": "extract_speakers",
+      "path": "tools/text/transcript/python/extract_speakers.py",
+      "category": "text/transcript",
+      "topic": "text",
+      "technology": "Python",
+      "platform": "Cross-platform/Python",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Извлича репликите на всеки говорител от transcript и създава отделен текстов файл за всеки.",
+      "help_command": "extract_speakers --help",
+      "markers": [
+        "scripts-toolbox: entrypoint",
+        "no-venv"
+      ]
+    },
+    {
+      "command": "fix_paragraphs",
+      "path": "tools/text/transcript/python/fix_paragraphs.py",
+      "category": "text/transcript",
+      "topic": "text",
+      "technology": "Python",
+      "platform": "Cross-platform/Python",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Нормализира transcript абзаци, като обединява редовете на всяка реплика в един чист параграф.",
+      "help_command": "fix_paragraphs --help",
+      "markers": [
+        "scripts-toolbox: entrypoint",
+        "no-venv"
+      ]
+    },
+    {
+      "command": "process_transcript",
+      "path": "tools/text/transcript/python/process_transcript.py",
+      "category": "text/transcript",
+      "topic": "text",
+      "technology": "Python",
+      "platform": "Cross-platform/Python",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Обединява последователни transcript реплики на един и същ говорител в общи параграфи.",
+      "help_command": "process_transcript --help",
+      "markers": [
+        "scripts-toolbox: entrypoint",
+        "no-venv"
+      ]
+    },
+    {
+      "command": "process_transcript_time_offset",
+      "path": "tools/text/transcript/python/process_transcript_time_offset.py",
+      "category": "text/transcript",
+      "topic": "text",
+      "technology": "Python",
+      "platform": "Cross-platform/Python",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Прилага времево отместване върху transcript timestamp-и и обединява последователни реплики.",
+      "help_command": "process_transcript_time_offset --help",
+      "markers": [
+        "scripts-toolbox: entrypoint",
+        "no-venv"
+      ]
+    },
+    {
+      "command": "split_by_speaker",
+      "path": "tools/text/transcript/python/split_by_speaker.py",
+      "category": "text/transcript",
+      "topic": "text",
+      "technology": "Python",
+      "platform": "Cross-platform/Python",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Разделя transcript по говорители и може да генерира общ файл, отделни файлове, JSON и timestamp списъци.",
+      "help_command": "split_by_speaker --help",
+      "markers": [
+        "scripts-toolbox: entrypoint",
+        "no-venv"
+      ]
+    },
+    {
+      "command": "split_by_speaker_ps1",
+      "path": "tools/text/transcript/powershell/split_by_speaker.ps1",
+      "category": "text/transcript",
+      "topic": "text",
+      "technology": "PowerShell",
+      "platform": "Cross-platform PowerShell",
+      "status": "active",
+      "entrypoint": true,
+      "no_path": false,
+      "description": "Разделя transcript по говорители с обединяване на последователни блокове.",
+      "help_command": "split_by_speaker_ps1 -Help",
+      "markers": [
+        "scripts-toolbox: entrypoint",
+        "scripts-toolbox: command=split_by_speaker_ps1"
+      ]
+    }
+  ],
+  "removed": []
+}

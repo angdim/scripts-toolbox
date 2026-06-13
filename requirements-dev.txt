@@ -1,0 +1,12 @@
+-r requirements.txt
+
+pytest
+pytest-mock
+ruff
+mypy
+radon
+vulture
+jsonschema
+types-jsonschema
+mutagen
+shazamio

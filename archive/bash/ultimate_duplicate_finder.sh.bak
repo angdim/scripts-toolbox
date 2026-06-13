@@ -1,0 +1,296 @@
+#!/usr/bin/env bash
+
+# ============================================
+# Ultimate Duplicate Finder for Ubuntu 24.04
+# Multi-path, filters, exclusions, min size,
+# between-only mode, progress indicator
+# ============================================
+
+set -o pipefail
+
+clear
+echo "=== Ultimate Duplicate Finder (Ubuntu 24.04) ==="
+echo
+
+# -------------------------------
+# USER INPUT
+# -------------------------------
+read -rp "Въведи пътищата (дялове/директории), разделени със запетая:
+Пример: /mnt/external/disk1, /mnt/external/disk2
+> " input_paths
+
+IFS=',' read -r -a PATHS_RAW <<< "$input_paths"
+PATHS=()
+for p in "${PATHS_RAW[@]}"; do
+  p_trimmed=$(echo "$p" | sed 's/^ *//;s/ *$//')
+  [[ -n "$p_trimmed" ]] && PATHS+=("$p_trimmed")
+done
+
+if ((${#PATHS[@]} == 0)); then
+  echo "Не са подадени валидни пътища. Прекратяване."
+  exit 1
+fi
+
+echo
+read -rp "Филтър по разширения (пример: jpg,mp4,pdf). Остави празно за всички:
+> " ext_input
+
+EXTENSIONS=()
+if [[ -n "$ext_input" ]]; then
+  IFS=',' read -r -a EXT_RAW <<< "$ext_input"
+  for e in "${EXT_RAW[@]}"; do
+    e_trimmed=$(echo "$e" | sed 's/^ *//;s/ *$//')
+    [[ -n "$e_trimmed" ]] && EXTENSIONS+=("$(echo "$e_trimmed" | tr '[:upper:]' '[:lower:]')")
+  done
+fi
+
+echo
+read -rp "Минимален размер на файл в мегабайти (пример: 10). Остави празно за без ограничение:
+> " min_size_mb
+
+MIN_SIZE_BYTES=0
+if [[ -n "$min_size_mb" ]]; then
+  if [[ "$min_size_mb" =~ ^[0-9]+$ ]]; then
+    MIN_SIZE_BYTES=$((min_size_mb * 1024 * 1024))
+  else
+    echo "Невалиден минимален размер, игнорирам (няма да има ограничение)."
+    MIN_SIZE_BYTES=0
+  fi
+fi
+
+echo
+read -rp "Изключване на папки (пример: /mnt/external/disk1/Temp, /mnt/external/disk2/Trash).
+Остави празно за никакви изключения:
+> " excl_input
+
+EXCLUSIONS=()
+if [[ -n "$excl_input" ]]; then
+  IFS=',' read -r -a EXCL_RAW <<< "$excl_input"
+  for ex in "${EXCL_RAW[@]}"; do
+    ex_trimmed=$(echo "$ex" | sed 's/^ *//;s/ *$//')
+    [[ -n "$ex_trimmed" ]] && EXCLUSIONS+=("$ex_trimmed")
+  done
+fi
+
+echo
+echo "Режим:"
+echo "  1) Намиране на дубликати вътре и между всички пътища"
+echo "  2) Само дубликати между различните пътища (игнорира вътрешните за един и същ път)"
+read -rp "Избери 1 или 2 (по подразбиране 1): " mode_choice
+
+MODE_BETWEEN_ONLY=0
+if [[ "$mode_choice" == "2" ]]; then
+  MODE_BETWEEN_ONLY=1
+fi
+
+echo
+echo "=== Стартиране на сканирането... ==="
+echo
+
+# -------------------------------
+# OUTPUT FILES
+# -------------------------------
+LOG="scan.log"
+CSV="duplicates_report.csv"
+HTML="duplicates_report.html"
+DELETE_LIST="duplicates_to_delete.txt"
+
+echo "=== Duplicate Scan Started ===" > "$LOG"
+date >> "$LOG"
+
+# -------------------------------
+# SIMPLE PROGRESS HELPER
+# -------------------------------
+show_progress() {
+  local current=$1
+  local total=$2
+  if (( total > 0 )); then
+    local percent=$(( 100 * current / total ))
+    echo -ne "Прогрес: $percent% ($current/$total) \r"
+  fi
+}
+
+# -------------------------------
+# COLLECT FILES
+# -------------------------------
+echo "Събирам файлове..." | tee -a "$LOG"
+
+ALL_FILES=()
+ALL_FILES_SOURCE=()   # кой базов път е източникът на файла, за between-only режима
+
+for P in "${PATHS[@]}"; do
+  if [[ -d "$P" ]]; then
+    CMD=(find "$P" -type f)
+
+    # Изключвания (директории)
+    for EX in "${EXCLUSIONS[@]}"; do
+      CMD+=( -not -path "$EX/*" )
+    done
+
+    # Минимален размер (ако има)
+    if (( MIN_SIZE_BYTES > 0 )); then
+      CMD+=( -size +"${MIN_SIZE_BYTES}c" )
+    fi
+
+    count_before=${#ALL_FILES[@]}
+    while IFS= read -r -d '' F; do
+      # Филтър по разширения
+      if ((${#EXTENSIONS[@]} > 0)); then
+        filename=$(basename "$F")
+        ext="${filename##*.}"
+        if [[ "$filename" == "$ext" ]]; then
+          # няма разширение
+          continue
+        fi
+        ext_lc=$(echo "$ext" | tr '[:upper:]' '[:lower:]')
+        match=0
+        for e in "${EXTENSIONS[@]}"; do
+          if [[ "$ext_lc" == "$e" ]]; then
+            match=1
+            break
+          fi
+        done
+        (( match == 0 )) && continue
+      fi
+
+      ALL_FILES+=("$F")
+      ALL_FILES_SOURCE+=("$P")
+    done < <("${CMD[@]}" -print0 2>/dev/null)
+
+    count_after=${#ALL_FILES[@]}
+    echo "Път '$P': добавени $((count_after - count_before)) файла." | tee -a "$LOG"
+  else
+    echo "Предупреждение: '$P' не е валидна директория, пропускам." | tee -a "$LOG"
+  fi
+done
+
+TOTAL=${#ALL_FILES[@]}
+echo "Общо намерени файлове: $TOTAL" | tee -a "$LOG"
+
+if (( TOTAL == 0 )); then
+  echo "Няма файлове по зададените критерии. Прекратяване."
+  exit 0
+fi
+
+# -------------------------------
+# GROUP BY SIZE
+# -------------------------------
+echo "Групиране по размер..." | tee -a "$LOG"
+
+declare -A SIZE_MAP           # ключ: размер, стойност: списък от индекси във ALL_FILES
+
+for idx in "${!ALL_FILES[@]}"; do
+  F="${ALL_FILES[$idx]}"
+  if [[ -f "$F" ]]; then
+    size=$(stat -c%s -- "$F" 2>/dev/null || echo "")
+    [[ -z "$size" ]] && continue
+    SIZE_MAP["$size"]+="$idx"$'\n'
+  fi
+done
+
+MATCHING_SIZE_GROUPS=()
+for size in "${!SIZE_MAP[@]}"; do
+  count=$(printf "%s" "${SIZE_MAP[$size]}" | sed '/^$/d' | wc -l)
+  if (( count > 1 )); then
+    MATCHING_SIZE_GROUPS+=("$size")
+  fi
+done
+
+echo "Размери с повече от един файл: ${#MATCHING_SIZE_GROUPS[@]}" | tee -a "$LOG"
+
+# -------------------------------
+# HASH FUNCTION
+# -------------------------------
+hash_file() {
+  local file="$1"
+  sha256sum -- "$file" 2>/dev/null | awk '{print $1}'
+}
+
+# -------------------------------
+# HASH MATCHING SIZES (with progress)
+# -------------------------------
+echo "Хеширане на файлове със съвпадащи размери..." | tee -a "$LOG"
+
+declare -A HASH_MAP       # ключ: хеш, стойност: списък от индекси във ALL_FILES
+
+total_groups=${#MATCHING_SIZE_GROUPS[@]}
+current_group=0
+
+for size in "${MATCHING_SIZE_GROUPS[@]}"; do
+  ((current_group++))
+  show_progress "$current_group" "$total_groups"
+
+  while IFS= read -r idx; do
+    [[ -z "$idx" ]] && continue
+    F="${ALL_FILES[$idx]}"
+    [[ ! -f "$F" ]] && continue
+    h=$(hash_file "$F")
+    [[ -z "$h" ]] && continue
+    HASH_MAP["$h"]+="$idx"$'\n'
+  done <<< "${SIZE_MAP[$size]}"
+done
+
+echo -ne "\nХеширане: завършено.\n" | tee -a "$LOG"
+
+# -------------------------------
+# FIND DUPLICATES
+# -------------------------------
+echo "Откриване на дубликати..." | tee -a "$LOG"
+
+echo "hash,location" > "$CSV"
+echo "<html><body><h1>Duplicate Report</h1><table border='1'>" > "$HTML"
+echo "<tr><th>Hash</th><th>Location</th></tr>" >> "$HTML"
+: > "$DELETE_LIST"
+
+duplicate_group_count=0
+
+for h in "${!HASH_MAP[@]}"; do
+  mapfile -t idx_list <<< "$(printf "%s" "${HASH_MAP[$h]}" | sed '/^$/d')"
+  if ((${#idx_list[@]} > 1)); then
+    # Списък от реални файлове за този хеш
+    files=()
+    sources=()
+    for idx in "${idx_list[@]}"; do
+      files+=("${ALL_FILES[$idx]}")
+      sources+=("${ALL_FILES_SOURCE[$idx]}")
+    done
+
+    # Ако сме в режим "само между пътищата"
+    if (( MODE_BETWEEN_ONLY == 1 )); then
+      # проверяваме дали има поне два различни източника
+      unique_sources=$(printf "%s\n" "${sources[@]}" | sort -u | wc -l)
+      if (( unique_sources < 2 )); then
+        # всички файлове са от един и същи път → пропускаме
+        continue
+      fi
+    fi
+
+    # До тук: това е валидна група дубликати
+    ((duplicate_group_count++))
+
+    # CSV & HTML
+    for f in "${files[@]}"; do
+      echo "$h,$f" >> "$CSV"
+      esc_path=$(printf '%s\n' "$f" | sed 's/&/&amp;/g;s/</\&lt;/g;s/>/\&gt;/g')
+      echo "<tr><td>$h</td><td>$esc_path</td></tr>" >> "$HTML"
+    done
+
+    # DELETE LIST – пазим първия, останалите са кандидати
+    for ((i=1; i<${#files[@]}; i++)); do
+      echo "${files[$i]}" >> "$DELETE_LIST"
+    done
+  fi
+done
+
+echo "</table></body></html>" >> "$HTML"
+
+echo "Намерени групи дубликати: $duplicate_group_count" | tee -a "$LOG"
+
+echo
+echo "=== Готово! ==="
+echo "Отчетите са създадени в текущата директория:"
+echo " - $CSV"
+echo " - $HTML"
+echo " - $LOG"
+echo " - $DELETE_LIST (само списък, скриптът НЕ трие нищо)"
+echo

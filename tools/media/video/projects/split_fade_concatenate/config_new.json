@@ -1,0 +1,25 @@
+{
+  "videos": {
+    "sample_part_3.mp4": {
+      "segments": [
+        ["00:00:00", "00:00:10"],
+        ["00:07:06", "01:11:49"]
+      ],
+      "fade": 1.0
+    }
+  },
+  "encoding": {
+    "video": {
+      "codec": "libx264",
+      "crf": 22,
+      "preset": "medium",
+      "tune": "film"
+    },
+    "audio": {
+      "codec": "aac",
+      "bitrate": "160k",
+      "channels": 2,
+      "sample_rate": "48000"
+    }
+  }
+}
