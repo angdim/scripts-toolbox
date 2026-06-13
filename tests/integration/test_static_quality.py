@@ -24,18 +24,27 @@ def test_python_sources_compile(repo_root: Path, python_executable: str) -> None
     assert result.returncode == 0, result.stderr
 
 
-def test_ruff_and_mypy_are_clean(repo_root: Path) -> None:
-    ruff = repo_root / ".venv" / "bin" / "ruff"
-    mypy = repo_root / ".venv" / "bin" / "mypy"
+def test_ruff_and_mypy_are_clean(repo_root: Path, python_executable: str) -> None:
     py_files = _files(repo_root, ".py")
 
     ruff_result = run_command(
-        [ruff, "check", "tools", "packages", "--exclude", "*/.venv/*", "--exclude", "__pycache__"],
+        [
+            python_executable,
+            "-m",
+            "ruff",
+            "check",
+            "tools",
+            "packages",
+            "--exclude",
+            "*/.venv/*",
+            "--exclude",
+            "__pycache__",
+        ],
         cwd=repo_root,
     )
     assert ruff_result.returncode == 0, ruff_result.stdout + ruff_result.stderr
 
-    mypy_result = run_command([mypy, *py_files], cwd=repo_root)
+    mypy_result = run_command([python_executable, "-m", "mypy", *py_files], cwd=repo_root)
     assert mypy_result.returncode == 0, mypy_result.stdout + mypy_result.stderr
 
 
