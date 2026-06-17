@@ -4,3 +4,4 @@
 discogs-client
 musicbrainzngs
 rapidfuzz
+Pillow

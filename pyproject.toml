@@ -30,6 +30,7 @@ exclude = [
 [[tool.mypy.overrides]]
 module = [
   "discogs_client",
+  "discogs_client.*",
   "jsonschema",
   "musicbrainzngs",
   "shazamio",

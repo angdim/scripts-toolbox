@@ -12,7 +12,17 @@
 
 import os
 
-from audio_metadata_normalizer.utils.chapters import parse_ogm_chapter_file
+from audio_metadata_normalizer.utils.chapters import parse_chapter_file
+
+
+def _apply_audio_template(path_value: str, audio_file: str) -> str:
+    stem = os.path.splitext(os.path.basename(audio_file))[0]
+    return path_value.format(stem=stem, name=stem)
+
+
+def default_sfa_chapter_filename(audio_file: str) -> str:
+    stem = os.path.splitext(os.path.basename(audio_file))[0]
+    return f"{stem}.chapters.txt"
 
 
 def resolve_chapter_output_path(album_dir: str, output_path: str | None) -> str:
@@ -25,6 +35,17 @@ def resolve_chapter_output_path(album_dir: str, output_path: str | None) -> str:
     return os.path.join(album_dir, output_path)
 
 
+def resolve_sfa_chapter_output_path(audio_file: str, output_path: str | None) -> str:
+    album_dir = os.path.dirname(audio_file)
+    name = output_path or default_sfa_chapter_filename(audio_file)
+    name = _apply_audio_template(name, audio_file)
+
+    if os.path.isabs(name):
+        return name
+
+    return os.path.join(album_dir, name)
+
+
 def resolve_chapter_input_path(album_dir: str, chapter_file: str | None) -> str:
     if not chapter_file:
         return os.path.join(album_dir, "chapters.txt")
@@ -35,6 +56,17 @@ def resolve_chapter_input_path(album_dir: str, chapter_file: str | None) -> str:
     return os.path.join(album_dir, chapter_file)
 
 
+def resolve_sfa_chapter_input_path(audio_file: str, chapter_file: str | None) -> str:
+    album_dir = os.path.dirname(audio_file)
+    name = chapter_file or default_sfa_chapter_filename(audio_file)
+    name = _apply_audio_template(name, audio_file)
+
+    if os.path.isabs(name):
+        return name
+
+    return os.path.join(album_dir, name)
+
+
 def resolve_audio_output_path(album_dir: str, output_path: str | None) -> str | None:
     if not output_path:
         return None
@@ -43,6 +75,17 @@ def resolve_audio_output_path(album_dir: str, output_path: str | None) -> str | 
         return output_path
 
     return os.path.join(album_dir, output_path)
+
+
+def resolve_sfa_audio_output_path(audio_file: str, output_path: str | None) -> str | None:
+    if not output_path:
+        return None
+
+    name = _apply_audio_template(output_path, audio_file)
+    if os.path.isabs(name):
+        return name
+
+    return os.path.join(os.path.dirname(audio_file), name)
 
 
 def build_temp_chaptered_path(audio_file: str) -> str:
@@ -109,17 +152,21 @@ def validate_chapters(chapters) -> bool:
     return True
 
 
-def print_chapters(chapters):
-    print("Глави за вграждане:")
+def print_chapters(chapters, header: str = "Глави за вграждане:"):
+    print(header)
     for idx, chapter in enumerate(chapters, start=1):
         print(f"{idx:02d}. {chapter['start']} - {chapter['title']}")
 
 
-def load_chapters_for_embedding(chapter_file: str):
-    chapters = parse_ogm_chapter_file(chapter_file)
+def load_chapters_for_embedding(chapter_file: str, header: str = "Глави за вграждане:"):
+    try:
+        chapters = parse_chapter_file(chapter_file)
+    except ValueError as exc:
+        print(f"Грешка в chapter файла: {exc}")
+        return None
 
     if not validate_chapters(chapters):
         return None
 
-    print_chapters(chapters)
+    print_chapters(chapters, header=header)
     return chapters

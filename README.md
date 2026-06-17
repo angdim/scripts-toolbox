@@ -169,6 +169,66 @@ scripts-catalog list --format json
 
 Документация: [docs/catalog/README.md](docs/catalog/README.md).
 
+## Albumtool и Lexus
+
+`albumtool.py` поддържа профили за embedded обложки, тествани върху Lexus RX 450h 2017.
+
+Най-полезните профили са:
+
+- `source` - използва оригиналната обложка без промяна.
+- `lexus-jpeg-300` - вгражда JPEG 300x300.
+- `lexus-jpeg-500` - вгражда JPEG 500x500.
+
+Практическият тест показа, че JPEG 300x300 и JPEG 500x500 се визуализират еднакво добре на заводския дисплей. PNG 500x500 не е надежден за тази система. За да се показват локалните embedded обложки, в настройките на автомобила трябва да е изключено `USB cover art by Gracenote®`, а `Display USB cover art` да остане включено.
+
+Пример за multi-file албум:
+
+```bash
+albumtool.py -S itunes all -d './Album' -C cover.jpg -P lexus-jpeg-500 --dry-run
+albumtool.py -S itunes all -d './Album' -C cover.jpg -P lexus-jpeg-500
+```
+
+Пример за single-file албум с chapters, metadata и Lexus-safe обложка:
+
+```bash
+albumtool.py -S itunes ech -F './Artist - 2024 - Album.m4a' -T -C cover.jpg -P lexus-jpeg-500 --dry-run
+albumtool.py -S itunes ech -F './Artist - 2024 - Album.m4a' -T -C cover.jpg -P lexus-jpeg-500
+```
+
+Direct SFA режимът позволява няколко single-file албума да стоят в една директория:
+
+```bash
+albumtool.py -S itunes scan --sfa-glob './*.m4a'
+albumtool.py -S itunes chapters --sfa-glob './*.m4a'
+albumtool.py -S itunes ech --sfa-glob './*.m4a' -T -C cover.jpg -P lexus-jpeg-500
+```
+
+`chapters` генерира човешки четим файл по подразбиране: заглавие на глава, под него начален момент `HH:MM:SS.mmm`, после празен ред. Старият `CHAPTER01=...` формат остава достъпен чрез `--chapters-format ogm`.
+
+SFA файл може да бъде разделен на отделни тракове с безопасен Lexus профил:
+
+```bash
+albumtool.py split-sfa -F './Artist - 2024 - Album.mp3' -C cover.jpg -P lexus-mp3 -n
+albumtool.py split-sfa -F './Artist - 2024 - Album.mp3' -C cover.jpg -P lexus-mp3
+```
+
+`split-sfa` използва редактирания chapter файл, избира автоматично стандартен bitrate `>=` входния bitrate и създава `playlist.m3u8`. Налични профили: `lexus-mp3` и `lexus-m4a`.
+
+`rename`, `tag` и `run-all` могат да работят и без `-S`, когато файловете са коректно номерирани и именувани: тогава metadata за траковете се извлича от текущите имена. `split-sfa` и `embed-chapters` без `-T` също са offline операции и не изискват `-S`. `scan`, `chapters`, `cover`, `rename-dirs` и `embed-chapters -T` изискват metadata source.
+
+`albumtool.py cover` записва изтеглената обложка с безопасно име от името на албума, например `God_Is_Able.jpg`. `--auto-cover` разпознава стандартните `cover/folder/front/album` имена и единствен image файл в album директорията.
+
+При `albumtool.py cover -n` се показват локалните и remote cover кандидати с формат, размери в пиксели и файлов размер. Ако има няколко remote кандидата, избери конкретен с `--cover-index N`.
+
+Offline пример за аудио книга или албум, който липсва в metadata базите:
+
+```bash
+albumtool.py tg -d './Audio Book Album' -a 'Author Name' -A 'Book Title' -n
+albumtool.py all -d './Audio Book Album' -a 'Author Name' -A 'Book Title' -n
+```
+
+При direct SFA режим metadata контекстът се извлича от името на файла. Ако името не е достатъчно ясно, използвай `--artist` и `--album`.
+
 ## Как работи публикуването на команди
 
 Инсталаторите не публикуват всеки файл автоматично. Публикуват се само скриптове, маркирани като entrypoint.
@@ -381,6 +441,8 @@ Python зависимости:
 ```bash
 pip install -r requirements.txt
 ```
+
+`Pillow` се използва от `albumtool.py` за Lexus-safe JPEG 300x300/500x500 cover профилите.
 
 Dev/test зависимости:
 

@@ -23,7 +23,7 @@ from .search import search_album
 from .scoring import pick_best_release
 from .trackmap import build_trackmap_with_chapters
 from audio_metadata_normalizer.utils.chapters import (
-    generate_ogm_chapter_file,
+    generate_chapter_file,
     embed_chapters_ffmpeg
 )
 from audio_metadata_normalizer.utils.normalize import normalize_duration_ms
@@ -137,8 +137,13 @@ class MusicBrainzProvider(MetadataProvider):
     # ------------------------------------------------------------
     # 6) Генериране на chapter файл
     # ------------------------------------------------------------
-    def generate_chapter_file(self, trackmap: List[Dict[str, Any]], output_path: str):
-        generate_ogm_chapter_file(trackmap, output_path)
+    def generate_chapter_file(
+        self,
+        trackmap: List[Dict[str, Any]],
+        output_path: str,
+        chapter_format: str = "human",
+    ):
+        generate_chapter_file(trackmap, output_path, chapter_format)
 
     # ------------------------------------------------------------
     # 7) Вграждане на chapters

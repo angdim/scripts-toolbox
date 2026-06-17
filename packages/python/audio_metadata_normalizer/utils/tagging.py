@@ -8,6 +8,10 @@
 
 import os
 
+from audio_metadata_normalizer.utils.cover_profile import (
+    ffmpeg_id3v2_version_for_profile,
+    prepared_cover_path,
+)
 from audio_metadata_normalizer.utils.ffmpeg import ffmpeg_tag_file
 
 
@@ -42,27 +46,56 @@ def build_album_tags(meta: dict, artist: str):
     }
 
 
-def tag_audio_file(path: str, tags: dict, cover_path: str | None, dry_run: bool):
+def tag_audio_file(
+    path: str,
+    tags: dict,
+    cover_path: str | None,
+    dry_run: bool,
+    cover_profile: str = "source",
+):
     tmp_out = build_temp_tag_path(path, 0)
 
     print(f"Тагване: {os.path.basename(path)}")
     if dry_run:
+        with prepared_cover_path(cover_path, cover_profile, dry_run=True):
+            pass
         return
 
-    ffmpeg_tag_file(path, tmp_out, tags, cover_path)
+    with prepared_cover_path(cover_path, cover_profile) as effective_cover_path:
+        ffmpeg_tag_file(
+            path,
+            tmp_out,
+            tags,
+            effective_cover_path,
+            id3v2_version=ffmpeg_id3v2_version_for_profile(path, cover_profile),
+        )
     os.replace(tmp_out, path)
 
 
-def tag_matched_files(meta: dict, matched, artist: str, cover_path: str | None, dry_run: bool):
+def tag_matched_files(
+    meta: dict,
+    matched,
+    artist: str,
+    cover_path: str | None,
+    dry_run: bool,
+    cover_profile: str = "source",
+):
     total_tracks = len(matched)
 
-    for idx, (path, track, score) in enumerate(matched, start=1):
-        tmp_out = build_temp_tag_path(path, idx)
-        tags = build_track_tags(meta, track, artist, idx, total_tracks)
+    with prepared_cover_path(cover_path, cover_profile, dry_run=dry_run) as effective_cover_path:
+        for idx, (path, track, score) in enumerate(matched, start=1):
+            tmp_out = build_temp_tag_path(path, idx)
+            tags = build_track_tags(meta, track, artist, idx, total_tracks)
 
-        print(f"Тагване: {os.path.basename(path)} ({score:.2f})")
-        if dry_run:
-            continue
+            print(f"Тагване: {os.path.basename(path)} ({score:.2f})")
+            if dry_run:
+                continue
 
-        ffmpeg_tag_file(path, tmp_out, tags, cover_path)
-        os.replace(tmp_out, path)
+            ffmpeg_tag_file(
+                path,
+                tmp_out,
+                tags,
+                effective_cover_path,
+                id3v2_version=ffmpeg_id3v2_version_for_profile(path, cover_profile),
+            )
+            os.replace(tmp_out, path)

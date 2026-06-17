@@ -9,6 +9,7 @@
 
 import os
 import shutil
+from glob import glob
 
 from audio_metadata_normalizer.utils.normalize import natural_sort_key
 
@@ -45,6 +46,45 @@ def get_single_audio_file(album_dir: str) -> str | None:
     return None
 
 
+def is_audio_file(file_path: str) -> bool:
+    if not os.path.isfile(file_path):
+        return False
+
+    _, ext = os.path.splitext(file_path)
+    return ext.lower() in AUDIO_EXT
+
+
+def resolve_sfa_audio_files(sfa_files=None, sfa_globs=None) -> list[str]:
+    """Разрешава explicit SFA входове от файлове и glob шаблони."""
+
+    candidates: list[str] = []
+
+    for file_path in sfa_files or []:
+        candidates.append(file_path)
+
+    for pattern in sfa_globs or []:
+        candidates.extend(glob(pattern))
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for candidate in sorted(candidates, key=natural_sort_key):
+        absolute = os.path.abspath(candidate)
+        if absolute in seen:
+            continue
+        seen.add(absolute)
+
+        if not is_audio_file(absolute):
+            print(f"Пропускане: не е поддържан аудио файл: {candidate}")
+            continue
+
+        result.append(absolute)
+
+    if candidates and not result:
+        print("Няма валидни SFA аудио файлове за обработка.")
+
+    return result
+
+
 def iter_album_dirs(target_dir: str):
     if has_audio_files(target_dir):
         yield os.path.abspath(target_dir)
@@ -75,3 +115,8 @@ def ensure_backup(dir_path: str, backup_dir: str):
 
     for file_path in iter_audio_files(dir_path):
         shutil.copy2(file_path, backup_dir)
+
+
+def ensure_file_backup(file_path: str, backup_dir: str):
+    os.makedirs(backup_dir, exist_ok=True)
+    shutil.copy2(file_path, backup_dir)

@@ -7,7 +7,7 @@ from typing import Any
 from audio_metadata_normalizer.metadata_provider.interface import MetadataProvider
 from audio_metadata_normalizer.utils.chapters import (
     embed_chapters_ffmpeg,
-    generate_ogm_chapter_file,
+    generate_chapter_file,
 )
 
 from .client import ITunesClient
@@ -64,8 +64,13 @@ class ITunesProvider(MetadataProvider):
     def build_trackmap(self, release: dict[str, Any]) -> list[dict[str, Any]]:
         return build_trackmap_with_chapters(self._tracks_for_release(release))
 
-    def generate_chapter_file(self, trackmap: list[dict[str, Any]], output_path: str):
-        generate_ogm_chapter_file(trackmap, output_path)
+    def generate_chapter_file(
+        self,
+        trackmap: list[dict[str, Any]],
+        output_path: str,
+        chapter_format: str = "human",
+    ):
+        generate_chapter_file(trackmap, output_path, chapter_format)
 
     def embed_chapters(self, input_file: str, output_file: str, chapter_file: str):
         embed_chapters_ffmpeg(input_file, output_file, chapter_file)

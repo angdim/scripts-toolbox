@@ -9,6 +9,7 @@
 import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 from audio_metadata_normalizer.utils.files import (
     iter_album_dirs,
@@ -148,12 +149,33 @@ def guess_artist_album_from_dir(dir_path: str):
     return parts.artist, parts.album
 
 
+def guess_artist_album_from_audio_file(audio_file: str):
+    """Извлича artist/album от името на SFA файл, без да разчита на album директория."""
+
+    path = Path(audio_file)
+    raw_album = path.stem.strip()
+    parent_artist = path.parent.name.strip() or None
+
+    parts = parse_album_directory_name(raw_album, parent_artist)
+
+    return parts.artist, parts.album
+
+
 def resolve_artist_album(
         album_dir: str,
         artist_override: str | None,
         album_override: str | None
 ):
     guessed_artist, guessed_album = guess_artist_album_from_dir(album_dir)
+    return artist_override or guessed_artist, album_override or guessed_album
+
+
+def resolve_artist_album_from_audio_file(
+        audio_file: str,
+        artist_override: str | None,
+        album_override: str | None
+):
+    guessed_artist, guessed_album = guess_artist_album_from_audio_file(audio_file)
     return artist_override or guessed_artist, album_override or guessed_album
 
 

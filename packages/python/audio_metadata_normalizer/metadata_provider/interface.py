@@ -40,8 +40,13 @@ class MetadataProvider(ABC):
         pass
 
     @abstractmethod
-    def generate_chapter_file(self, trackmap: List[Dict[str, Any]], output_path: str):
-        """Генерира OGM chapter файл."""
+    def generate_chapter_file(
+        self,
+        trackmap: List[Dict[str, Any]],
+        output_path: str,
+        chapter_format: str = "human",
+    ):
+        """Генерира chapter файл в human или OGM формат."""
         pass
 
     @abstractmethod
