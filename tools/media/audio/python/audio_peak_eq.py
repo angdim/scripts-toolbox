@@ -3,19 +3,20 @@
 """
 audio_peak_eq.py
 
-Инструмент за Linux за channel balance, peak-базирано усилване и EQ обработка чрез FFmpeg филтри.
+Инструмент за Linux за анализ, channel balance, EQ обработка и нормализация чрез FFmpeg филтри.
 
 Скриптът обработва аудио файлове директно, а при видео файлове променя само
 аудио потока и копира видео потока без прекодиране. Когато са заявени channel
-balance, EQ и peak нормализация, редът е: първо изравняване на каналите, после
-EQ, след това финално измерване на peak и прилагане на gain. Финалната peak
-нормализация е последна, защото и balance, и EQ могат да променят максималния
-пик на аудио потока.
+balance, EQ и нормализация, редът е: първо изравняване на каналите, после
+EQ/почистващи филтри, след това финална peak или loudness нормализация.
+Финалната нормализация е последна, защото balance, EQ и denoise могат да
+променят peak и възприеманата сила на аудио потока.
 """
 
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict, dataclass, field
 import json
 import re
 import shutil
@@ -253,6 +254,74 @@ AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg"}
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".mov", ".webm", ".avi"}
 MAX_SAFE_TARGET_DB = -0.1
 DEFAULT_BALANCE_THRESHOLD_DB = 0.25
+DEFAULT_LOUDNESS_TARGETS = {
+    "speech": -16.0,
+    "music": -14.0,
+    "other": -18.0,
+}
+DEFAULT_TRUE_PEAK_TARGET_DB = -1.5
+DEFAULT_LRA_TARGET = 11.0
+DEFAULT_ANALYSIS_SECONDS = 0.0
+SPECTRAL_BANDS = {
+    "sub": (20, 60, "sub бас / rumble"),
+    "bass": (60, 200, "бас"),
+    "low_mid": (200, 500, "ниски среди / mud"),
+    "mid": (500, 2000, "среди"),
+    "presence": (2000, 5000, "presence / разбираемост"),
+    "sibilance": (5000, 9000, "сибиланти / острота"),
+    "air": (9000, 16000, "въздух / най-високи"),
+}
+
+
+@dataclass
+class AudioTechnicalInfo:
+    """Технически данни за първия audio stream и контейнера."""
+
+    duration: float | None = None
+    codec: str | None = None
+    sample_rate: int | None = None
+    channels: int | None = None
+    channel_layout: str | None = None
+    bit_rate: int | None = None
+    container: str | None = None
+
+
+@dataclass
+class AudioAnalysis:
+    """Обобщен резултат от автоматичния анализ."""
+
+    input_file: str
+    technical: AudioTechnicalInfo
+    max_peak_db: float | None = None
+    mean_volume_db: float | None = None
+    integrated_lufs: float | None = None
+    true_peak_db: float | None = None
+    loudness_range_lu: float | None = None
+    loudness_threshold_lufs: float | None = None
+    silence_ratio: float | None = None
+    silence_segments: int = 0
+    channel_peaks_db: list[float] = field(default_factory=list)
+    spectral_bands_db: dict[str, float] = field(default_factory=dict)
+    spectral_relative_db: dict[str, float] = field(default_factory=dict)
+    detected_content_type: str = "other"
+    content_confidence: float = 0.0
+    notes: list[str] = field(default_factory=list)
+
+
+@dataclass
+class AudioRecommendation:
+    """Препоръка за подобрение, изведена от анализа."""
+
+    content_type: str
+    confidence: float
+    target_lufs: float
+    target_true_peak_db: float
+    target_lra: float
+    preset_names: list[str] = field(default_factory=list)
+    filters: list[str] = field(default_factory=list)
+    deficits: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    normalization_mode: str = "loudness"
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -262,27 +331,48 @@ def parse_arguments() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         add_help=False,
         description=(
-            "Прилага незадължително channel balance, EQ и peak-базиран gain, така че "
-            "максималният audio peak да достигне зададеното target ниво."
+            "Анализира и подобрява audio/video файлове чрез FFmpeg. Поддържа "
+            "диагностика, автоматична препоръка, channel balance, EQ, peak "
+            "нормализация и loudness нормализация."
         ),
         epilog="""
 Примери:
+  audio_peak_eq.py -aa -i input.wav
+  audio_peak_eq.py -rp -i input.wav -aj report.json
+  audio_peak_eq.py -ap -i input.wav -o improved.wav -ct auto
   audio_peak_eq.py -i input.wav -o output.wav -t -0.5
+  audio_peak_eq.py -i input.wav -o output.wav -nm loudness -lt -16 -tp -1.5
   audio_peak_eq.py -i input.wav -o output.wav -B -t -0.5
   audio_peak_eq.py -i input.mkv -o output.mkv -B --balance-mode all -t -1.0
   audio_peak_eq.py -i input.mp4 -o output.mp4 -p vocal_clarity -t -1.0
   audio_peak_eq.py -i song.flac -o song_eq.flac --preset bass_boost --target-level -0.7
   audio_peak_eq.py -i in.wav -o out.wav --eq-filter "equalizer=f=1000:t=q:w=1:g=2"
-  audio_peak_eq.py --list-presets
+  audio_peak_eq.py -lp
 
-Препоръчителна последователност:
+Основни режими:
+  -aa / --analyze-audio
+      Само анализира входа и печата отчет. Не изисква -o/--output.
+
+  -rp / --recommend-processing
+      Анализира входа и предлага корекция с FFmpeg филтри. Не обработва файла.
+
+  -ap / --apply-recommendation
+      Анализира входа, изгражда препоръчана filter chain и създава изходен файл.
+      Изисква -o/--output.
+
+Препоръчителна последователност при обработка:
   1. Channel balance, ако е заявен с -B/--balance-channels.
-  2. EQ preset-и и потребителски EQ филтри.
-  3. Финална peak нормализация.
+  2. Автоматично препоръчани филтри, EQ preset-и и потребителски EQ филтри.
+  3. Финална нормализация: peak или loudness според -nm/--normalization-mode.
 
   Скриптът следва този ред автоматично. Balance коригира канален imbalance
-  на източника, EQ работи върху вече подравнени канали, а peak нормализацията
-  е последна, защото предишните два етапа могат да променят максималния peak.
+  на източника, EQ/denoise работи върху вече подравнени канали, а нормализацията
+  е последна, защото предишните етапи могат да променят peak и loudness.
+
+Класификация на съдържанието:
+  -ct / --content-type auto|speech|music|other
+      auto използва консервативни heuristics по loudness, паузи, честотни ленти
+      и канална информация. При ниска увереност препоръките са по-предпазливи.
 """,
     )
     parser._optionals.title = "Опции"
@@ -291,17 +381,91 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("-i", "--input", help="Входен audio/video файл.")
     parser.add_argument("-o", "--output", help="Изходен файл.")
     parser.add_argument(
+        "-aa",
+        "--analyze-audio",
+        action="store_true",
+        help="Анализира входния audio stream и извежда диагностичен отчет, без да създава изходен файл.",
+    )
+    parser.add_argument(
+        "-rp",
+        "--recommend-processing",
+        action="store_true",
+        help="Анализира входа и предлага конкретна корекция с preset-и и FFmpeg филтри, без да обработва файла.",
+    )
+    parser.add_argument(
+        "-ap",
+        "--apply-recommendation",
+        action="store_true",
+        help="Прилага автоматично препоръчаната обработка. Изисква -o/--output.",
+    )
+    parser.add_argument(
+        "-aj",
+        "--analysis-json",
+        help="Записва анализа и препоръката като JSON файл. Полезно за преглед, логове и повторяеми batch процеси.",
+    )
+    parser.add_argument(
+        "-ct",
+        "--content-type",
+        choices=("auto", "speech", "music", "other"),
+        default="auto",
+        help="Тип съдържание за препоръките. 'auto' опитва автоматично разпознаване. По подразбиране: auto.",
+    )
+    parser.add_argument(
+        "-as",
+        "--analysis-seconds",
+        type=float,
+        default=DEFAULT_ANALYSIS_SECONDS,
+        help=(
+            "Ограничава част от анализа до първите N секунди. 0 означава целия файл. "
+            "При много дълги файлове стойности 120-300 ускоряват диагностиката. По подразбиране: 0."
+        ),
+    )
+    parser.add_argument(
         "-t",
         "--target-level",
         type=float,
         default=-0.5,
-        help="Target максимален peak в dBFS, например -0.5. По подразбиране: -0.5",
+        help="Target максимален sample peak в dBFS при -nm peak, например -0.5. По подразбиране: -0.5.",
+    )
+    parser.add_argument(
+        "-nm",
+        "--normalization-mode",
+        choices=("peak", "loudness"),
+        default=None,
+        help=(
+            "Финална нормализация: 'peak' използва volume gain до --target-level; "
+            "'loudness' използва EBU R128 loudnorm. Ако липсва, ръчната обработка използва peak, "
+            "а -ap/--apply-recommendation използва loudness."
+        ),
+    )
+    parser.add_argument(
+        "-lt",
+        "--loudness-target",
+        type=float,
+        help=(
+            "Target integrated loudness в LUFS за -nm loudness. Ако липсва, се избира според типа: "
+            "speech -16, music -14, other -18."
+        ),
+    )
+    parser.add_argument(
+        "-tp",
+        "--true-peak-target",
+        type=float,
+        default=DEFAULT_TRUE_PEAK_TARGET_DB,
+        help=f"Target true peak за loudnorm в dBTP. По подразбиране: {DEFAULT_TRUE_PEAK_TARGET_DB}.",
+    )
+    parser.add_argument(
+        "-lr",
+        "--lra-target",
+        type=float,
+        default=DEFAULT_LRA_TARGET,
+        help=f"Target loudness range за loudnorm в LU. По подразбиране: {DEFAULT_LRA_TARGET}.",
     )
     parser.add_argument(
         "-p",
         "--preset",
         choices=sorted(PRESETS),
-        help="EQ preset, който се прилага след channel balance и преди peak нормализацията.",
+        help="EQ preset, който се прилага след channel balance и преди финалната нормализация.",
     )
     parser.add_argument(
         "-e",
@@ -323,6 +487,7 @@ def parse_arguments() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "-bm",
         "--balance-mode",
         choices=("stereo", "all"),
         default="stereo",
@@ -332,6 +497,7 @@ def parse_arguments() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "-bt",
         "--balance-threshold",
         type=float,
         default=DEFAULT_BALANCE_THRESHOLD_DB,
@@ -341,47 +507,56 @@ def parse_arguments() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "-az",
         "--analyzer",
         choices=("ffmpeg", "ffmpeg-normalize"),
         default="ffmpeg",
         help="Backend за peak анализ. По подразбиране: ffmpeg volumedetect.",
     )
     parser.add_argument(
+        "-ac",
         "--audio-codec",
         default="auto",
         help="Изходен audio codec. Използвай 'auto' за избор според разширението. По подразбиране: auto",
     )
     parser.add_argument(
+        "-sr",
         "--sample-rate",
         type=int,
         help="Опционален output audio sample rate, например 48000.",
     )
     parser.add_argument(
+        "-br",
         "--bitrate",
         help="Опционален output audio bitrate за lossy codecs, например 192k.",
     )
     parser.add_argument(
+        "-nv",
         "--no-video-copy",
         action="store_true",
         help="Не копирай video streams. Обичайно видеото се копира без промяна.",
     )
     parser.add_argument(
+        "-ow",
         "--overwrite",
         "-y",
         action="store_true",
         help="Презаписва изходния файл, ако вече съществува.",
     )
     parser.add_argument(
+        "-kt",
         "--keep-temp",
         action="store_true",
-        help="Запазва временния EQ файл за проверка.",
+        help="Запазва временния pre-normalization файл за проверка.",
     )
     parser.add_argument(
+        "-dr",
         "--dry-run",
         action="store_true",
         help="Показва FFmpeg командите, без да ги изпълнява.",
     )
     parser.add_argument(
+        "-lp",
         "--list-presets",
         action="store_true",
         help="Показва наличните EQ preset-и и излиза.",
@@ -392,8 +567,15 @@ def parse_arguments() -> argparse.Namespace:
         return args
     if args.balance_threshold < 0:
         parser.error("--balance-threshold трябва да бъде >= 0")
-    if not args.input or not args.output:
-        parser.error("-i/--input и -o/--output са задължителни, освен при --list-presets")
+    if args.analysis_seconds < 0:
+        parser.error("--analysis-seconds трябва да бъде >= 0")
+    if args.true_peak_target > 0:
+        parser.error("--true-peak-target трябва да бъде <= 0 dBTP")
+    if not args.input:
+        parser.error("-i/--input е задължителен, освен при --list-presets")
+    output_required = not (args.analyze_audio or args.recommend_processing) or args.apply_recommendation
+    if output_required and not args.output:
+        parser.error("-o/--output е задължителен при обработка и при --apply-recommendation")
     return args
 
 
@@ -496,6 +678,50 @@ def get_audio_channel_count(input_path: Path) -> int:
         raise SystemExit(f"Неуспешно извличане на броя audio канали за: {input_path}") from exc
 
 
+def get_audio_technical_info(input_path: Path) -> AudioTechnicalInfo:
+    """Извлича технически данни за първия audio stream чрез ffprobe JSON."""
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-print_format",
+        "json",
+        "-show_format",
+        "-show_streams",
+        str(input_path),
+    ]
+    output = run_command(command, capture=True)
+    try:
+        data = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"Неуспешно четене на ffprobe JSON за: {input_path}") from exc
+
+    audio_stream = next((stream for stream in data.get("streams", []) if stream.get("codec_type") == "audio"), {})
+    fmt = data.get("format", {})
+
+    def optional_int(value: object) -> int | None:
+        try:
+            return int(value) if value not in (None, "N/A") else None
+        except (TypeError, ValueError):
+            return None
+
+    def optional_float(value: object) -> float | None:
+        try:
+            return float(value) if value not in (None, "N/A") else None
+        except (TypeError, ValueError):
+            return None
+
+    return AudioTechnicalInfo(
+        duration=optional_float(fmt.get("duration")),
+        codec=audio_stream.get("codec_name"),
+        sample_rate=optional_int(audio_stream.get("sample_rate")),
+        channels=optional_int(audio_stream.get("channels")),
+        channel_layout=audio_stream.get("channel_layout"),
+        bit_rate=optional_int(audio_stream.get("bit_rate") or fmt.get("bit_rate")),
+        container=fmt.get("format_name"),
+    )
+
+
 def choose_audio_codec(output_path: Path, requested: str, has_video_stream: bool) -> str:
     """Избира подходящ codec според изходното разширение, освен ако е зададен явно."""
     if requested != "auto":
@@ -554,6 +780,98 @@ def parse_ffmpeg_max_volume(output: str) -> float:
     if value == "-inf":
         raise SystemExit("Входът изглежда тих/без сигнал; peak нормализацията няма смисъл.")
     return float(value)
+
+
+def parse_optional_db(value: str | None) -> float | None:
+    """Преобразува FFmpeg numeric dB стойност към float, като пази липсващи/безкрайни стойности."""
+    if value is None or value in {"-inf", "inf", "nan", "-nan"}:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def parse_ffmpeg_volume_stats(output: str) -> dict[str, float | None]:
+    """Извлича mean_volume и max_volume от FFmpeg volumedetect изход."""
+    mean_matches = re.findall(r"mean_volume:\s*(-?inf|-?\d+(?:\.\d+)?)\s*dB", output)
+    max_matches = re.findall(r"max_volume:\s*(-?inf|-?\d+(?:\.\d+)?)\s*dB", output)
+    return {
+        "mean_volume_db": parse_optional_db(mean_matches[-1] if mean_matches else None),
+        "max_peak_db": parse_optional_db(max_matches[-1] if max_matches else None),
+    }
+
+
+def add_analysis_duration(command: list[str], seconds: float) -> list[str]:
+    """Добавя -t към FFmpeg анализа, когато е зададен положителен лимит в секунди."""
+    if seconds > 0:
+        command.extend(["-t", f"{seconds:g}"])
+    return command
+
+
+def run_audio_filter_analysis(input_path: Path, audio_filter: str, analysis_seconds: float = 0) -> str:
+    """Изпълнява FFmpeg анализ върху първия audio stream с даден audio filter."""
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostats",
+        "-i",
+        str(input_path),
+        "-map",
+        "0:a:0",
+    ]
+    add_analysis_duration(command, analysis_seconds)
+    command += ["-af", audio_filter, "-f", "null", "-"]
+    return run_command(command, capture=True)
+
+
+def analyze_volume_stats(input_path: Path, analysis_seconds: float = 0) -> dict[str, float | None]:
+    """Измерва sample peak и mean volume чрез FFmpeg volumedetect."""
+    output = run_audio_filter_analysis(input_path, "volumedetect", analysis_seconds)
+    return parse_ffmpeg_volume_stats(output)
+
+
+def extract_last_json_object(output: str) -> dict[str, object] | None:
+    """Намира последния JSON обект във FFmpeg изход, използван от loudnorm."""
+    matches = re.findall(r"\{(?:.|\n)*?\}", output)
+    for item in reversed(matches):
+        try:
+            return json.loads(item)
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def analyze_loudnorm_stats(
+    input_path: Path,
+    target_lufs: float,
+    true_peak_target: float,
+    lra_target: float,
+    analysis_seconds: float = 0,
+) -> dict[str, float | None]:
+    """Измерва EBU R128 loudness, true peak и LRA чрез FFmpeg loudnorm JSON."""
+    loudnorm_filter = (
+        f"loudnorm=I={target_lufs:g}:TP={true_peak_target:g}:"
+        f"LRA={lra_target:g}:print_format=json"
+    )
+    output = run_audio_filter_analysis(input_path, loudnorm_filter, analysis_seconds)
+    data = extract_last_json_object(output) or {}
+
+    def get_float(key: str) -> float | None:
+        value = data.get(key)
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            return parse_optional_db(value)
+        return None
+
+    return {
+        "input_i": get_float("input_i"),
+        "input_tp": get_float("input_tp"),
+        "input_lra": get_float("input_lra"),
+        "input_thresh": get_float("input_thresh"),
+        "target_offset": get_float("target_offset"),
+    }
 
 
 def analyze_peak_ffmpeg(input_path: Path) -> float:
@@ -617,6 +935,59 @@ def analyze_peak(input_path: Path, analyzer: str) -> float:
     return analyze_peak_ffmpeg(input_path)
 
 
+def analyze_band_mean_volume(
+    input_path: Path,
+    low_frequency: int,
+    high_frequency: int,
+    analysis_seconds: float = 0,
+) -> float | None:
+    """Измерва средното ниво в честотна лента чрез highpass/lowpass и volumedetect."""
+    band_filter = f"highpass=f={low_frequency},lowpass=f={high_frequency},volumedetect"
+    stats = parse_ffmpeg_volume_stats(run_audio_filter_analysis(input_path, band_filter, analysis_seconds))
+    return stats["mean_volume_db"]
+
+
+def analyze_spectral_bands(input_path: Path, analysis_seconds: float = 0) -> dict[str, float]:
+    """Измерва груб спектрален баланс по практически полезни честотни ленти."""
+    result: dict[str, float] = {}
+    for name, (low_frequency, high_frequency, description) in SPECTRAL_BANDS.items():
+        print(f"Анализирам честотна лента {name} ({description}): {low_frequency}-{high_frequency} Hz")
+        value = analyze_band_mean_volume(input_path, low_frequency, high_frequency, analysis_seconds)
+        if value is not None:
+            result[name] = value
+    return result
+
+
+def detect_silence_segments(
+    input_path: Path,
+    duration: float | None,
+    analysis_seconds: float = 0,
+    threshold_db: float = -45.0,
+    minimum_duration: float = 0.5,
+) -> tuple[int, float | None]:
+    """Открива периоди на тишина и връща брой сегменти и приблизителен дял от анализа."""
+    output = run_audio_filter_analysis(
+        input_path,
+        f"silencedetect=noise={threshold_db:g}dB:d={minimum_duration:g}",
+        analysis_seconds,
+    )
+    starts = [float(item) for item in re.findall(r"silence_start:\s*([\d.]+)", output)]
+    ended_segments = [
+        (float(end), float(length))
+        for end, length in re.findall(r"silence_end:\s*([\d.]+)\s*\|\s*silence_duration:\s*([\d.]+)", output)
+    ]
+    measured_duration = duration
+    if analysis_seconds > 0 and duration:
+        measured_duration = min(duration, analysis_seconds)
+    if not measured_duration or measured_duration <= 0:
+        return len(starts), None
+
+    total_silence = sum(length for _, length in ended_segments)
+    if len(starts) > len(ended_segments):
+        total_silence += max(0.0, measured_duration - starts[-1])
+    return len(starts), min(1.0, max(0.0, total_silence / measured_duration))
+
+
 def analyze_channel_peak(input_path: Path, channel_index: int) -> float:
     """Измерва peak на конкретен канал чрез pan към mono и volumedetect."""
     command = [
@@ -643,6 +1014,303 @@ def analyze_channel_peaks(input_path: Path, channel_count: int) -> list[float]:
         print(f"Анализирам peak на канал {channel_index + 1}/{channel_count}: {input_path}")
         peaks.append(analyze_channel_peak(input_path, channel_index))
     return peaks
+
+
+def relative_band_levels(bands: dict[str, float], mean_volume_db: float | None) -> dict[str, float]:
+    """Преобразува абсолютните band нива към относителни стойности спрямо общия mean volume."""
+    if mean_volume_db is None:
+        return {}
+    return {name: value - mean_volume_db for name, value in bands.items()}
+
+
+def classify_audio_content(analysis: AudioAnalysis, requested_type: str) -> tuple[str, float]:
+    """Класифицира съдържанието като speech/music/other чрез консервативни heuristics."""
+    if requested_type != "auto":
+        return requested_type, 1.0
+
+    rel = analysis.spectral_relative_db
+    silence_ratio = analysis.silence_ratio or 0.0
+    channels = analysis.technical.channels or 0
+
+    speech_score = 0.10
+    music_score = 0.10
+
+    if 0.03 <= silence_ratio <= 0.45:
+        speech_score += 0.25
+    if silence_ratio < 0.12:
+        music_score += 0.15
+    if channels >= 2:
+        music_score += 0.15
+    if channels == 1:
+        speech_score += 0.15
+
+    if rel.get("presence", -99) > rel.get("air", -99) + 6:
+        speech_score += 0.20
+    if rel.get("low_mid", -99) > rel.get("sub", -99) + 4:
+        speech_score += 0.10
+    if rel.get("bass", -99) > -18 and rel.get("air", -99) > -30:
+        music_score += 0.25
+    if rel.get("sub", -99) > -20 and rel.get("air", -99) > -28:
+        music_score += 0.10
+
+    lra = analysis.loudness_range_lu
+    if lra is not None:
+        if 4 <= lra <= 18:
+            speech_score += 0.10
+        if 2 <= lra <= 14:
+            music_score += 0.10
+
+    if analysis.mean_volume_db is not None and analysis.mean_volume_db < -55:
+        return "other", 0.45
+
+    scores = {"speech": speech_score, "music": music_score}
+    content_type, score = max(scores.items(), key=lambda item: item[1])
+    confidence = min(0.95, max(0.35, score))
+    if abs(speech_score - music_score) < 0.10 and confidence < 0.70:
+        return "other", 0.45
+    return content_type, confidence
+
+
+def analyze_audio_file(input_path: Path, args: argparse.Namespace) -> AudioAnalysis:
+    """Изпълнява пълен практически анализ за диагностика и препоръки."""
+    technical = get_audio_technical_info(input_path)
+    target_for_analysis = args.loudness_target
+    if target_for_analysis is None:
+        target_for_analysis = DEFAULT_LOUDNESS_TARGETS["speech"]
+
+    print(f"Анализирам технически параметри, нива, loudness, тишина и честотен баланс: {input_path}")
+    volume_stats = analyze_volume_stats(input_path, args.analysis_seconds)
+    loudnorm_stats = analyze_loudnorm_stats(
+        input_path,
+        target_for_analysis,
+        args.true_peak_target,
+        args.lra_target,
+        args.analysis_seconds,
+    )
+    silence_segments, silence_ratio = detect_silence_segments(input_path, technical.duration, args.analysis_seconds)
+    spectral_bands = analyze_spectral_bands(input_path, args.analysis_seconds)
+    spectral_relative = relative_band_levels(spectral_bands, volume_stats.get("mean_volume_db"))
+
+    channel_peaks: list[float] = []
+    if technical.channels and 1 < technical.channels <= 8:
+        channel_peaks = analyze_channel_peaks(input_path, technical.channels)
+
+    analysis = AudioAnalysis(
+        input_file=str(input_path),
+        technical=technical,
+        max_peak_db=volume_stats.get("max_peak_db"),
+        mean_volume_db=volume_stats.get("mean_volume_db"),
+        integrated_lufs=loudnorm_stats.get("input_i"),
+        true_peak_db=loudnorm_stats.get("input_tp"),
+        loudness_range_lu=loudnorm_stats.get("input_lra"),
+        loudness_threshold_lufs=loudnorm_stats.get("input_thresh"),
+        silence_ratio=silence_ratio,
+        silence_segments=silence_segments,
+        channel_peaks_db=channel_peaks,
+        spectral_bands_db=spectral_bands,
+        spectral_relative_db=spectral_relative,
+    )
+    analysis.detected_content_type, analysis.content_confidence = classify_audio_content(analysis, args.content_type)
+
+    if args.analysis_seconds > 0:
+        analysis.notes.append(
+            f"Част от анализа е ограничена до първите {args.analysis_seconds:g} секунди; "
+            "за финално решение върху целия файл използвай --analysis-seconds 0."
+        )
+    if analysis.content_confidence < 0.65 and args.content_type == "auto":
+        analysis.notes.append(
+            "Автоматичното разпознаване е с ниска увереност; препоръките са предпазливи. "
+            "За по-точен резултат задай --content-type speech, music или other."
+        )
+    return analysis
+
+
+def has_channel_imbalance(analysis: AudioAnalysis, threshold: float) -> bool:
+    """Проверява дали channel peak разликата предполага нужда от balance."""
+    if len(analysis.channel_peaks_db) < 2:
+        return False
+    return max(analysis.channel_peaks_db) - min(analysis.channel_peaks_db) > threshold
+
+
+def build_audio_recommendation(analysis: AudioAnalysis, args: argparse.Namespace) -> AudioRecommendation:
+    """Изгражда човешки проверима и FFmpeg-приложима препоръка от анализа."""
+    content_type = analysis.detected_content_type
+    target_lufs = args.loudness_target
+    if target_lufs is None:
+        target_lufs = DEFAULT_LOUDNESS_TARGETS.get(content_type, DEFAULT_LOUDNESS_TARGETS["other"])
+
+    recommendation = AudioRecommendation(
+        content_type=content_type,
+        confidence=analysis.content_confidence,
+        target_lufs=target_lufs,
+        target_true_peak_db=args.true_peak_target,
+        target_lra=args.lra_target,
+        normalization_mode=resolve_normalization_mode(args),
+    )
+
+    def add_preset(name: str, reason: str) -> None:
+        if name not in recommendation.preset_names:
+            recommendation.preset_names.append(name)
+            recommendation.filters.extend(PRESETS[name])
+        if reason not in recommendation.deficits:
+            recommendation.deficits.append(reason)
+
+    def add_filter(ffmpeg_filter: str, reason: str) -> None:
+        if ffmpeg_filter not in recommendation.filters:
+            recommendation.filters.append(ffmpeg_filter)
+        if reason not in recommendation.deficits:
+            recommendation.deficits.append(reason)
+
+    rel = analysis.spectral_relative_db
+    low_confidence = args.content_type == "auto" and analysis.content_confidence < 0.65
+
+    if analysis.integrated_lufs is not None:
+        if analysis.integrated_lufs < target_lufs - 3:
+            recommendation.deficits.append(
+                f"Ниско възприемано ниво: {analysis.integrated_lufs:.1f} LUFS при цел {target_lufs:.1f} LUFS."
+            )
+        elif analysis.integrated_lufs > target_lufs + 3:
+            recommendation.deficits.append(
+                f"Високо възприемано ниво: {analysis.integrated_lufs:.1f} LUFS при цел {target_lufs:.1f} LUFS."
+            )
+
+    peak = analysis.true_peak_db if analysis.true_peak_db is not None else analysis.max_peak_db
+    if peak is not None and peak > args.true_peak_target + 1.0:
+        recommendation.warnings.append(
+            f"Peak/true peak е близо до цифровия максимум ({peak:.1f} dB); нормализацията трябва да остане последна."
+        )
+
+    if has_channel_imbalance(analysis, args.balance_threshold):
+        difference = max(analysis.channel_peaks_db) - min(analysis.channel_peaks_db)
+        recommendation.deficits.append(f"Канален imbalance около {difference:.1f} dB; препоръчва се channel balance.")
+
+    if analysis.silence_ratio is not None and analysis.silence_ratio > 0.35:
+        recommendation.warnings.append(
+            f"Открита е много тишина ({analysis.silence_ratio * 100:.0f}% от анализа). "
+            "Помисли за trim/split преди силна нормализация."
+        )
+
+    if not low_confidence:
+        if content_type == "speech":
+            if rel.get("sub", -99) > -18:
+                add_filter("highpass=f=90", "Нискочестотен rumble под полезния говорен диапазон.")
+            if rel.get("low_mid", -99) > -8:
+                add_preset("de_mud", "Мътност в ниските среди около 200-500 Hz.")
+            if rel.get("presence", -99) < -14:
+                add_preset("presence_boost", "Недостатъчна разбираемост/presence за говор.")
+            if rel.get("sibilance", -99) > -7:
+                add_preset("sibilance_soften", "Вероятни сибиланти или острота във високите среди.")
+            if not recommendation.filters:
+                add_preset("speech_cleanup", "Базово почистване и яснота за говор.")
+        elif content_type == "music":
+            if rel.get("sub", -99) > -14:
+                add_preset("bass_tighten", "Прекомерен sub/rumble или разхлабен нисък бас.")
+            if rel.get("low_mid", -99) > -7:
+                add_preset("de_mud", "Натрупване в ниските среди.")
+            if rel.get("presence", -99) > -5:
+                add_preset("harshness_reduce", "Вероятна острота в зоната 2.5-5 kHz.")
+            if rel.get("air", -99) < -28:
+                add_preset("air_boost", "Липса на въздух и най-високи честоти.")
+            if not recommendation.filters:
+                add_preset("soft_loudness_balance", "Лека тонална корекция за по-балансирано слушане.")
+        else:
+            if rel.get("sub", -99) > -16:
+                add_preset("rumble_removal", "Нискочестотен rumble.")
+            if rel.get("low_mid", -99) > -7:
+                add_preset("boxiness_reduce", "Кутиест или стаен характер в ниските среди.")
+    else:
+        if rel.get("sub", -99) > -14:
+            add_preset("rumble_removal", "Нискочестотен rumble при неясен тип съдържание.")
+        recommendation.warnings.append("Ниска увереност в типа съдържание; избягват се агресивни EQ/denoise решения.")
+
+    if not recommendation.filters:
+        recommendation.deficits.append("Не са открити ясни тонални дефицити; препоръчва се само финална нормализация.")
+
+    return recommendation
+
+
+def print_analysis_report(analysis: AudioAnalysis) -> None:
+    """Печата кратък, но изчерпателен отчет на български."""
+    tech = analysis.technical
+    print("\n=== Аудио анализ ===")
+    print(f"Файл: {analysis.input_file}")
+    print(f"Тип съдържание: {analysis.detected_content_type} (увереност {analysis.content_confidence:.2f})")
+    print("Технически данни:")
+    print(f"  продължителност: {tech.duration:.2f} s" if tech.duration else "  продължителност: неизвестна")
+    print(f"  codec: {tech.codec or 'неизвестен'}")
+    print(f"  sample rate: {tech.sample_rate or 'неизвестен'} Hz")
+    print(f"  канали: {tech.channels or 'неизвестно'} ({tech.channel_layout or 'без layout'})")
+    print(f"  bitrate: {tech.bit_rate or 'неизвестен'} bps")
+    print("Нива:")
+    print(format_optional_metric("  max sample peak", analysis.max_peak_db, "dBFS"))
+    print(format_optional_metric("  mean volume", analysis.mean_volume_db, "dB"))
+    print(format_optional_metric("  integrated loudness", analysis.integrated_lufs, "LUFS"))
+    print(format_optional_metric("  true peak", analysis.true_peak_db, "dBTP"))
+    print(format_optional_metric("  loudness range", analysis.loudness_range_lu, "LU"))
+    if analysis.silence_ratio is not None:
+        print(f"  тишина: {analysis.silence_segments} сегмента, приблизително {analysis.silence_ratio * 100:.1f}%")
+    else:
+        print(f"  тишина: {analysis.silence_segments} сегмента, дял неизвестен")
+    if analysis.channel_peaks_db:
+        print("Канали:")
+        for index, peak in enumerate(analysis.channel_peaks_db, 1):
+            print(f"  канал {index}: {peak:.2f} dBFS")
+    if analysis.spectral_relative_db:
+        print("Честотен баланс спрямо общото mean ниво:")
+        for name, (_, _, description) in SPECTRAL_BANDS.items():
+            if name in analysis.spectral_relative_db:
+                print(f"  {name:10s} {analysis.spectral_relative_db[name]:+6.1f} dB  ({description})")
+    for note in analysis.notes:
+        print(f"Бележка: {note}")
+
+
+def format_optional_metric(label: str, value: float | None, unit: str) -> str:
+    """Форматира метрика с липсваща стойност без двусмислие."""
+    if value is None:
+        return f"{label}: неизвестно"
+    return f"{label}: {value:.2f} {unit}"
+
+
+def print_recommendation(recommendation: AudioRecommendation) -> None:
+    """Печата препоръката в CLI-четим вид."""
+    print("\n=== Препоръка ===")
+    print(f"Тип: {recommendation.content_type} (увереност {recommendation.confidence:.2f})")
+    print(
+        "Финална нормализация: "
+        f"{recommendation.normalization_mode}, I={recommendation.target_lufs:g} LUFS, "
+        f"TP={recommendation.target_true_peak_db:g} dBTP, LRA={recommendation.target_lra:g} LU"
+    )
+    if recommendation.deficits:
+        print("Установени дефицити:")
+        for item in recommendation.deficits:
+            print(f"  - {item}")
+    if recommendation.preset_names:
+        print("Препоръчани preset-и:")
+        for name in recommendation.preset_names:
+            print(f"  - {name}: {PRESET_DESCRIPTIONS.get(name, 'Няма описание.')}")
+    if recommendation.filters:
+        print("Препоръчана FFmpeg filter chain преди нормализация:")
+        print(f"  {','.join(recommendation.filters)}")
+    if recommendation.warnings:
+        print("Предупреждения:")
+        for item in recommendation.warnings:
+            print(f"  - {item}")
+
+
+def write_analysis_json(
+    output_path: Path,
+    analysis: AudioAnalysis,
+    recommendation: AudioRecommendation | None,
+) -> None:
+    """Записва анализа и препоръката в JSON файл с UTF-8 текст."""
+    output_path = output_path.expanduser().resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "analysis": asdict(analysis),
+        "recommendation": asdict(recommendation) if recommendation else None,
+    }
+    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"Записан JSON отчет: {output_path}")
 
 
 def db_to_linear(gain_db: float) -> float:
@@ -680,7 +1348,7 @@ def build_channel_balance_filter(
     if strongest_peak > -1.0:
         print(
             "Предупреждение: най-силният канал е близо до 0 dBFS; "
-            "финалната peak нормализация остава задължителна последна стъпка."
+            "финалната нормализация остава задължителна последна стъпка."
         )
 
     channel_layout = "stereo" if channel_count == 2 else f"{channel_count}c"
@@ -717,7 +1385,7 @@ def collect_pre_normalization_filters(
     args: argparse.Namespace,
     eq_filters: Sequence[str],
 ) -> list[str]:
-    """Създава filter chain за етапа преди финалната peak нормализация: balance -> EQ."""
+    """Създава filter chain за етапа преди финалната нормализация: balance -> EQ/филтри."""
     filters: list[str] = []
     if args.balance_channels:
         if args.dry_run:
@@ -791,15 +1459,102 @@ def apply_peak_normalization(
     return gain
 
 
-def validate_paths(args: argparse.Namespace) -> tuple[Path, Path]:
+def build_measured_loudnorm_filter(
+    measured: dict[str, float | None],
+    target_lufs: float,
+    true_peak_target: float,
+    lra_target: float,
+) -> str:
+    """Създава loudnorm filter, предпочитайки двупасови measured параметри, когато са налични."""
+    base = f"loudnorm=I={target_lufs:g}:TP={true_peak_target:g}:LRA={lra_target:g}"
+    required = ["input_i", "input_tp", "input_lra", "input_thresh", "target_offset"]
+    if not all(measured.get(key) is not None for key in required):
+        return f"{base}:print_format=summary"
+
+    return (
+        f"{base}:"
+        f"measured_I={measured['input_i']:.6g}:"
+        f"measured_TP={measured['input_tp']:.6g}:"
+        f"measured_LRA={measured['input_lra']:.6g}:"
+        f"measured_thresh={measured['input_thresh']:.6g}:"
+        f"offset={measured['target_offset']:.6g}:"
+        "linear=true:print_format=summary"
+    )
+
+
+def resolve_loudness_target(content_type: str, args: argparse.Namespace) -> float:
+    """Избира LUFS target от CLI или от типа съдържание."""
+    if args.loudness_target is not None:
+        return args.loudness_target
+    return DEFAULT_LOUDNESS_TARGETS.get(content_type, DEFAULT_LOUDNESS_TARGETS["other"])
+
+
+def resolve_normalization_mode(args: argparse.Namespace) -> str:
+    """Определя финалната нормализация според режима на работа."""
+    if args.normalization_mode:
+        return args.normalization_mode
+    if args.apply_recommendation:
+        return "loudness"
+    return "peak"
+
+
+def apply_loudness_normalization(
+    input_path: Path,
+    output_path: Path,
+    content_type: str,
+    args: argparse.Namespace,
+) -> None:
+    """Прилага EBU R128 loudnorm като финален етап."""
+    target_lufs = resolve_loudness_target(content_type, args)
+    render_args = argparse.Namespace(**vars(args))
+    if not render_args.sample_rate:
+        render_args.sample_rate = get_audio_technical_info(input_path).sample_rate
+
+    if args.dry_run:
+        loudnorm_filter = (
+            f"loudnorm=I={target_lufs:g}:TP={args.true_peak_target:g}:"
+            f"LRA={args.lra_target:g}:print_format=summary"
+        )
+        print("Dry run: loudnorm measured pass се пропуска; показва се еднопасовата команда.")
+        command = build_ffmpeg_command(input_path, output_path, [loudnorm_filter], render_args)
+        run_command(command, dry_run=True)
+        return
+
+    print(
+        "Анализирам loudness за финална нормализация: "
+        f"I={target_lufs:g} LUFS, TP={args.true_peak_target:g} dBTP, LRA={args.lra_target:g} LU"
+    )
+    measured = analyze_loudnorm_stats(input_path, target_lufs, args.true_peak_target, args.lra_target, 0)
+    loudnorm_filter = build_measured_loudnorm_filter(measured, target_lufs, args.true_peak_target, args.lra_target)
+    command = build_ffmpeg_command(input_path, output_path, [loudnorm_filter], render_args)
+    run_command(command, dry_run=False)
+
+
+def apply_final_normalization(
+    input_path: Path,
+    output_path: Path,
+    content_type: str,
+    args: argparse.Namespace,
+) -> None:
+    """Прилага избрания финален normalization режим."""
+    mode = resolve_normalization_mode(args)
+    if mode == "loudness":
+        apply_loudness_normalization(input_path, output_path, content_type, args)
+    else:
+        apply_peak_normalization(input_path, output_path, args.target_level, args)
+
+
+def validate_paths(args: argparse.Namespace) -> tuple[Path, Path | None]:
     """Проверява входния и изходния път преди началото на обработката."""
     input_path = Path(args.input).expanduser().resolve()
-    output_path = Path(args.output).expanduser().resolve()
+    output_path = Path(args.output).expanduser().resolve() if args.output else None
 
     if not input_path.is_file():
         raise SystemExit(f"Входният файл не съществува: {input_path}")
     if input_path.suffix.lower() not in AUDIO_EXTENSIONS | VIDEO_EXTENSIONS:
         print(f"Предупреждение: непознато разширение '{input_path.suffix}'; опитвам FFmpeg обработка въпреки това.")
+    if output_path is None:
+        return input_path, None
     if output_path.exists() and not args.overwrite:
         raise SystemExit(f"Изходният файл съществува: {output_path}. Използвай --overwrite за презапис.")
     if input_path == output_path:
@@ -810,7 +1565,7 @@ def validate_paths(args: argparse.Namespace) -> tuple[Path, Path]:
 
 
 def main() -> int:
-    """Координира parser-а, balance/EQ етапа, peak анализа и финалното рендериране."""
+    """Координира parser-а, анализа, препоръките, filter етапа и финалното рендериране."""
     args = parse_arguments()
     if args.list_presets:
         list_presets()
@@ -825,18 +1580,60 @@ def main() -> int:
     if not has_stream(input_path, "audio"):
         raise SystemExit(f"Не е открит audio stream във входа: {input_path}")
 
+    analysis: AudioAnalysis | None = None
+    recommendation: AudioRecommendation | None = None
+    if args.analyze_audio or args.recommend_processing or args.apply_recommendation:
+        analysis = analyze_audio_file(input_path, args)
+        print_analysis_report(analysis)
+
+    if analysis and (args.recommend_processing or args.apply_recommendation):
+        recommendation = build_audio_recommendation(analysis, args)
+        print_recommendation(recommendation)
+
+    if args.analysis_json:
+        if analysis is None:
+            analysis = analyze_audio_file(input_path, args)
+            print_analysis_report(analysis)
+        if recommendation is None and (args.recommend_processing or args.apply_recommendation):
+            recommendation = build_audio_recommendation(analysis, args)
+        write_analysis_json(Path(args.analysis_json), analysis, recommendation)
+
+    if args.analyze_audio and not args.recommend_processing and not args.apply_recommendation:
+        print("Готово: анализът приключи без обработка на файл.")
+        return 0
+
+    if args.recommend_processing and not args.apply_recommendation:
+        print("Готово: препоръката е изведена без обработка на файл.")
+        return 0
+
+    if output_path is None:
+        raise SystemExit("-o/--output е задължителен при обработка.")
+
+    recommended_filters: list[str] = []
+    content_type_for_normalization = args.content_type if args.content_type != "auto" else "other"
+    if recommendation:
+        recommended_filters = recommendation.filters
+        content_type_for_normalization = recommendation.content_type
+        if analysis and has_channel_imbalance(analysis, args.balance_threshold):
+            print("Автоматичната препоръка включва channel balance заради измерена канална разлика.")
+            args.balance_channels = True
+
+    if not recommendation and analysis:
+        content_type_for_normalization = analysis.detected_content_type
+
+    eq_filters = recommended_filters + eq_filters
     pre_filters = collect_pre_normalization_filters(input_path, args, eq_filters)
 
     if not pre_filters:
         if args.balance_channels:
-            print("Не е приложен channel balance и не е избран EQ; прилагам само peak нормализация.")
+            print("Не е приложен channel balance и не е избран EQ; прилагам само финална нормализация.")
         else:
-            print("Не е избран EQ/channel balance; прилагам само peak нормализация.")
-        apply_peak_normalization(input_path, output_path, args.target_level, args)
+            print("Не е избран EQ/channel balance; прилагам само финална нормализация.")
+        apply_final_normalization(input_path, output_path, content_type_for_normalization, args)
         print("Готово.")
         return 0
 
-    print("Ред на обработка: channel balance -> EQ -> peak нормализация.")
+    print("Ред на обработка: channel balance -> филтри/EQ -> финална нормализация.")
     with tempfile.TemporaryDirectory(prefix="audio_peak_eq_") as temp_dir:
         temp_suffix = output_path.suffix if has_stream(input_path, "video") else ".wav"
         temp_path = Path(temp_dir) / f"pre_normalize_stage{temp_suffix}"
@@ -845,7 +1642,7 @@ def main() -> int:
 
         print(f"Временен pre-normalization файл: {temp_path}")
         apply_eq_filters(input_path, temp_path, pre_filters, stage_args)
-        apply_peak_normalization(temp_path, output_path, args.target_level, args)
+        apply_final_normalization(temp_path, output_path, content_type_for_normalization, args)
 
         if args.keep_temp and not args.dry_run:
             kept_path = output_path.with_name(f"{output_path.stem}.pre_normalize_stage{output_path.suffix}")
