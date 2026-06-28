@@ -51,7 +51,7 @@
 | Команда | Технология | Платформа | Описание | Помощ | Път |
 |---|---|---|---|---|---|
 | albumtool | Python | Cross-platform/Python | Инструмент за разпознаване, преименуване, тагване и chapter обработка на аудио албуми. | `albumtool --help` | `tools/media/audio/python/albumtool.py` |
-| audio_peak_eq | Python | Cross-platform/Python | Инструмент за Linux за channel balance, peak-базирано усилване и EQ обработка чрез FFmpeg филтри. | `audio_peak_eq --help` | `tools/media/audio/python/audio_peak_eq.py` |
+| audio_peak_eq | Python | Cross-platform/Python | Инструмент за Linux за анализ, channel balance, EQ обработка и нормализация чрез FFmpeg филтри. | `audio_peak_eq --help` | `tools/media/audio/python/audio_peak_eq.py` |
 | convert_to_mp3 | Bash | Linux/Unix | Няма извлечено описание. Стартирай help командата за повече информация. | `convert_to_mp3 --help` | `tools/media/audio/bash/convert_to_mp3.sh` |
 | generate_playlist | Bash | Linux/Unix | Няма извлечено описание. Стартирай help командата за повече информация. | `generate_playlist --help` | `tools/media/audio/bash/generate_playlist.sh` |
 | m4a2mp3_converter | Python | Cross-platform/Python | M4A към MP3 конвертор с аудио обработка чрез FFmpeg. | `m4a2mp3_converter --help` | `tools/media/audio/python/m4a2mp3_converter.py` |

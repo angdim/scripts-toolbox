@@ -24,7 +24,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Sequence, cast
 
 
 # EQ preset-ите са FFmpeg аудио филтърни фрагменти. По-късно се съединяват
@@ -262,6 +262,10 @@ DEFAULT_LOUDNESS_TARGETS = {
 DEFAULT_TRUE_PEAK_TARGET_DB = -1.5
 DEFAULT_LRA_TARGET = 11.0
 DEFAULT_ANALYSIS_SECONDS = 0.0
+DEFAULT_SILENCE_THRESHOLD_DB = -45.0
+DEFAULT_SILENCE_DURATION = 2.0
+DEFAULT_KEEP_SILENCE = 0.4
+DEFAULT_SILENCE_WINDOW = 0.02
 SPECTRAL_BANDS = {
     "sub": (20, 60, "sub бас / rumble"),
     "bass": (60, 200, "бас"),
@@ -309,6 +313,27 @@ class AudioAnalysis:
 
 
 @dataclass
+class SilenceSegment:
+    """Открит сегмент тишина според silencedetect."""
+
+    start: float
+    end: float
+    duration: float
+
+
+@dataclass
+class TimeRange:
+    """Запазен времеви диапазон от оригиналния файл след премахване на паузи."""
+
+    start: float
+    end: float
+
+    @property
+    def duration(self) -> float:
+        return max(0.0, self.end - self.start)
+
+
+@dataclass
 class AudioRecommendation:
     """Препоръка за подобрение, изведена от анализа."""
 
@@ -347,6 +372,10 @@ def parse_arguments() -> argparse.Namespace:
   audio_peak_eq.py -i input.mp4 -o output.mp4 -p vocal_clarity -t -1.0
   audio_peak_eq.py -i song.flac -o song_eq.flac --preset bass_boost --target-level -0.7
   audio_peak_eq.py -i in.wav -o out.wav --eq-filter "equalizer=f=1000:t=q:w=1:g=2"
+  audio_peak_eq.py --analyze-silence -i input.wav --silence-threshold -45 --silence-duration 2
+  audio_peak_eq.py --trim-silence -i input.wav -o trimmed.wav --keep-silence 0.4 --overwrite
+  audio_peak_eq.py --trim-silence -i input.wav -o trimmed.wav --trim-silence-scope edges --keep-start-silence 0.2 --keep-end-silence 0.8
+  audio_peak_eq.py --trim-silence -i input.mp4 -o trimmed.mp4 --cut-transition crossfade --video-cut-transition crossfade
   audio_peak_eq.py -lp
 
 Основни режими:
@@ -363,11 +392,13 @@ def parse_arguments() -> argparse.Namespace:
 Препоръчителна последователност при обработка:
   1. Channel balance, ако е заявен с -B/--balance-channels.
   2. Автоматично препоръчани филтри, EQ preset-и и потребителски EQ филтри.
-  3. Финална нормализация: peak или loudness според -nm/--normalization-mode.
+  3. Изрязване/скъсяване на дълги паузи, ако е заявено с --trim-silence.
+  4. Финална нормализация: peak или loudness според -nm/--normalization-mode.
 
   Скриптът следва този ред автоматично. Balance коригира канален imbalance
-  на източника, EQ/denoise работи върху вече подравнени канали, а нормализацията
-  е последна, защото предишните етапи могат да променят peak и loudness.
+  на източника, EQ/denoise работи върху вече подравнени канали, silence trim
+  променя времевата структура, а нормализацията е последна, защото предишните
+  етапи могат да променят peak и loudness.
 
 Класификация на съдържанието:
   -ct / --content-type auto|speech|music|other
@@ -402,6 +433,12 @@ def parse_arguments() -> argparse.Namespace:
         "-aj",
         "--analysis-json",
         help="Записва анализа и препоръката като JSON файл. Полезно за преглед, логове и повторяеми batch процеси.",
+    )
+    parser.add_argument(
+        "-asr",
+        "--analyze-silence",
+        action="store_true",
+        help="Само анализира паузи/тишина чрез silencedetect и извежда сегментите, без да създава изходен файл.",
     )
     parser.add_argument(
         "-ct",
@@ -514,6 +551,138 @@ def parse_arguments() -> argparse.Namespace:
         help="Backend за peak анализ. По подразбиране: ffmpeg volumedetect.",
     )
     parser.add_argument(
+        "-ts",
+        "--trim-silence",
+        action="store_true",
+        help=(
+            "Изрязва/скъсява паузи по-дълги от --silence-duration чрез FFmpeg silenceremove. "
+            "Прилага се след balance/EQ и преди финалната нормализация."
+        ),
+    )
+    parser.add_argument(
+        "-ste",
+        "--silence-trim-engine",
+        choices=("auto", "silenceremove", "concat"),
+        default="auto",
+        help=(
+            "Механизъм за silence trim. auto използва silenceremove за прост audio trim и concat "
+            "при fade/crossfade или видео. concat е нужен за точни transition-и. По подразбиране: auto."
+        ),
+    )
+    parser.add_argument(
+        "-st",
+        "--silence-threshold",
+        type=float,
+        default=DEFAULT_SILENCE_THRESHOLD_DB,
+        help=f"Праг за тишина в dBFS. По подразбиране: {DEFAULT_SILENCE_THRESHOLD_DB}.",
+    )
+    parser.add_argument(
+        "-sd",
+        "--silence-duration",
+        type=float,
+        default=DEFAULT_SILENCE_DURATION,
+        help=f"Минимална продължителност на пауза за обработка в секунди. По подразбиране: {DEFAULT_SILENCE_DURATION}.",
+    )
+    parser.add_argument(
+        "-ks",
+        "--keep-silence",
+        type=float,
+        default=DEFAULT_KEEP_SILENCE,
+        help=(
+            "Fallback стойност за тишината, която да се запази от обработена пауза, "
+            "ако не са зададени специфични --keep-start/--keep-middle/--keep-end параметри. "
+            f"По подразбиране: {DEFAULT_KEEP_SILENCE}."
+        ),
+    )
+    parser.add_argument(
+        "-tss",
+        "--trim-silence-scope",
+        choices=("all", "edges", "middle", "start", "end"),
+        default="all",
+        help=(
+            "Кои паузи да се обработват: all=начало+среда+край, edges=само начало+край, "
+            "middle=повтарящи се вътрешни паузи, start=само начало, end=само край. "
+            "По подразбиране: all."
+        ),
+    )
+    parser.add_argument(
+        "-kss",
+        "--keep-start-silence",
+        type=float,
+        help="Тишина в секунди, която да остане от начална пауза. Ако липсва, използва --keep-silence.",
+    )
+    parser.add_argument(
+        "-kms",
+        "--keep-middle-silence",
+        type=float,
+        help="Тишина в секунди, която да остане от вътрешни паузи. Ако липсва, използва --keep-silence.",
+    )
+    parser.add_argument(
+        "-kes",
+        "--keep-end-silence",
+        type=float,
+        help="Тишина в секунди, която да остане от крайна пауза. Ако липсва, използва --keep-silence.",
+    )
+    parser.add_argument(
+        "-sm",
+        "--silence-channel-mode",
+        choices=("all", "any"),
+        default="all",
+        help=(
+            "Multi-channel режим за тишина. all приема тишина само ако всички канали са под прага; "
+            "any е по-агресивен. По подразбиране: all."
+        ),
+    )
+    parser.add_argument(
+        "-dm",
+        "--silence-detection",
+        choices=("avg", "rms", "peak", "median", "ptp", "dev"),
+        default="rms",
+        help="Метод за оценка на тишината в silenceremove. По подразбиране: rms.",
+    )
+    parser.add_argument(
+        "-sw",
+        "--silence-window",
+        type=float,
+        default=DEFAULT_SILENCE_WINDOW,
+        help=f"Времеви прозорец за silence detection в секунди. По подразбиране: {DEFAULT_SILENCE_WINDOW}.",
+    )
+    parser.add_argument(
+        "-ctn",
+        "--cut-transition",
+        choices=("none", "fade", "crossfade"),
+        default="none",
+        help=(
+            "Audio transition на cut местата при concat trim: none, fade или crossfade. "
+            "fade прави fade-out/fade-in; crossfade припокрива съседните сегменти. По подразбиране: none."
+        ),
+    )
+    parser.add_argument(
+        "-cfd",
+        "--cut-fade-duration",
+        type=float,
+        default=0.03,
+        help="Продължителност на fade/crossfade около cut в секунди. По подразбиране: 0.03.",
+    )
+    parser.add_argument(
+        "-cfc",
+        "--cut-fade-curve",
+        choices=("tri", "qsin", "hsin", "esin", "log", "exp"),
+        default="tri",
+        help="Крива за audio fade/crossfade. По подразбиране: tri.",
+    )
+    parser.add_argument(
+        "-vtn",
+        "--video-cut-transition",
+        choices=("match", "none", "fade", "crossfade"),
+        default="match",
+        help=(
+            "Video transition на cut местата при видео concat trim: match следва --cut-transition, "
+            "none изключва video fade, fade прави fade-out/fade-in, crossfade използва FFmpeg xfade. "
+            "По подразбиране: match."
+        ),
+    )
+    parser.add_argument(
         "-ac",
         "--audio-codec",
         default="auto",
@@ -569,11 +738,25 @@ def parse_arguments() -> argparse.Namespace:
         parser.error("--balance-threshold трябва да бъде >= 0")
     if args.analysis_seconds < 0:
         parser.error("--analysis-seconds трябва да бъде >= 0")
+    if args.silence_threshold > 0:
+        parser.error("--silence-threshold трябва да бъде <= 0 dBFS")
+    if args.silence_duration <= 0:
+        parser.error("--silence-duration трябва да бъде > 0")
+    if args.keep_silence < 0:
+        parser.error("--keep-silence трябва да бъде >= 0")
+    for name in ("keep_start_silence", "keep_middle_silence", "keep_end_silence"):
+        value = getattr(args, name)
+        if value is not None and value < 0:
+            parser.error(f"--{name.replace('_', '-')} трябва да бъде >= 0")
+    if args.silence_window < 0 or args.silence_window > 10:
+        parser.error("--silence-window трябва да бъде между 0 и 10 секунди")
+    if args.cut_fade_duration < 0:
+        parser.error("--cut-fade-duration трябва да бъде >= 0")
     if args.true_peak_target > 0:
         parser.error("--true-peak-target трябва да бъде <= 0 dBTP")
     if not args.input:
         parser.error("-i/--input е задължителен, освен при --list-presets")
-    output_required = not (args.analyze_audio or args.recommend_processing) or args.apply_recommendation
+    output_required = not (args.analyze_audio or args.recommend_processing or args.analyze_silence) or args.apply_recommendation
     if output_required and not args.output:
         parser.error("-o/--output е задължителен при обработка и при --apply-recommendation")
     return args
@@ -692,22 +875,26 @@ def get_audio_technical_info(input_path: Path) -> AudioTechnicalInfo:
     ]
     output = run_command(command, capture=True)
     try:
-        data = json.loads(output)
+        data = cast(dict[str, Any], json.loads(output))
     except json.JSONDecodeError as exc:
         raise SystemExit(f"Неуспешно четене на ffprobe JSON за: {input_path}") from exc
 
-    audio_stream = next((stream for stream in data.get("streams", []) if stream.get("codec_type") == "audio"), {})
-    fmt = data.get("format", {})
+    streams = cast(list[dict[str, Any]], data.get("streams", []))
+    audio_stream: dict[str, Any] = next(
+        (stream for stream in streams if stream.get("codec_type") == "audio"),
+        {},
+    )
+    fmt = cast(dict[str, Any], data.get("format", {}))
 
     def optional_int(value: object) -> int | None:
         try:
-            return int(value) if value not in (None, "N/A") else None
+            return int(str(value)) if value not in (None, "N/A") else None
         except (TypeError, ValueError):
             return None
 
     def optional_float(value: object) -> float | None:
         try:
-            return float(value) if value not in (None, "N/A") else None
+            return float(str(value)) if value not in (None, "N/A") else None
         except (TypeError, ValueError):
             return None
 
@@ -958,34 +1145,201 @@ def analyze_spectral_bands(input_path: Path, analysis_seconds: float = 0) -> dic
     return result
 
 
+def measured_analysis_duration(duration: float | None, analysis_seconds: float = 0) -> float | None:
+    """Връща реалната продължителност, върху която се прави анализ."""
+
+    if analysis_seconds > 0 and duration:
+        return min(duration, analysis_seconds)
+    return duration
+
+
+def parse_silencedetect_output(output: str, measured_duration: float | None = None) -> list[SilenceSegment]:
+    """Парсва FFmpeg silencedetect stderr и връща silence сегменти."""
+
+    starts = [float(item) for item in re.findall(r"silence_start:\s*([\d.]+)", output)]
+    ended_segments = [
+        SilenceSegment(
+            start=max(0.0, float(end) - float(length)),
+            end=float(end),
+            duration=float(length),
+        )
+        for end, length in re.findall(r"silence_end:\s*([\d.]+)\s*\|\s*silence_duration:\s*([\d.]+)", output)
+    ]
+
+    if measured_duration and len(starts) > len(ended_segments):
+        start = starts[-1]
+        ended_segments.append(
+            SilenceSegment(
+                start=start,
+                end=measured_duration,
+                duration=max(0.0, measured_duration - start),
+            )
+        )
+
+    return ended_segments
+
+
 def detect_silence_segments(
     input_path: Path,
     duration: float | None,
     analysis_seconds: float = 0,
     threshold_db: float = -45.0,
     minimum_duration: float = 0.5,
-) -> tuple[int, float | None]:
-    """Открива периоди на тишина и връща брой сегменти и приблизителен дял от анализа."""
+) -> tuple[list[SilenceSegment], float | None]:
+    """Открива периоди на тишина и връща сегменти и приблизителен дял от анализа."""
     output = run_audio_filter_analysis(
         input_path,
         f"silencedetect=noise={threshold_db:g}dB:d={minimum_duration:g}",
         analysis_seconds,
     )
-    starts = [float(item) for item in re.findall(r"silence_start:\s*([\d.]+)", output)]
-    ended_segments = [
-        (float(end), float(length))
-        for end, length in re.findall(r"silence_end:\s*([\d.]+)\s*\|\s*silence_duration:\s*([\d.]+)", output)
-    ]
-    measured_duration = duration
-    if analysis_seconds > 0 and duration:
-        measured_duration = min(duration, analysis_seconds)
+    measured_duration = measured_analysis_duration(duration, analysis_seconds)
+    segments = parse_silencedetect_output(output, measured_duration)
     if not measured_duration or measured_duration <= 0:
-        return len(starts), None
+        return segments, None
 
-    total_silence = sum(length for _, length in ended_segments)
-    if len(starts) > len(ended_segments):
-        total_silence += max(0.0, measured_duration - starts[-1])
-    return len(starts), min(1.0, max(0.0, total_silence / measured_duration))
+    total_silence = sum(segment.duration for segment in segments)
+    return segments, min(1.0, max(0.0, total_silence / measured_duration))
+
+
+def print_silence_report(
+    input_path: Path,
+    segments: Sequence[SilenceSegment],
+    silence_ratio: float | None,
+    args: argparse.Namespace,
+) -> None:
+    """Печата подробен отчет за откритите паузи и очакваната обработка."""
+
+    print("\n=== Анализ на тишина/паузи ===")
+    print(f"Файл: {input_path}")
+    print(f"Праг: {args.silence_threshold:g} dBFS")
+    print(f"Минимална продължителност: {args.silence_duration:g} s")
+    print(f"Scope: {args.trim_silence_scope}")
+    print(
+        "Запазвана тишина при trim: "
+        f"start={resolve_keep_silence(args, 'start'):g}s, "
+        f"middle={resolve_keep_silence(args, 'middle'):g}s, "
+        f"end={resolve_keep_silence(args, 'end'):g}s"
+    )
+    print(f"Канален режим: {args.silence_channel_mode}")
+    print(f"Detection: {args.silence_detection}, window={args.silence_window:g} s")
+    if silence_ratio is not None:
+        print(f"Общо засечена тишина: {silence_ratio * 100:.1f}% от анализирания участък")
+    if not segments:
+        print("Не са открити паузи над зададения праг.")
+        return
+
+    print("Сегменти:")
+    for index, segment in enumerate(segments, start=1):
+        kept = min(resolve_keep_silence(args, classify_silence_segment_position(segment, segments)), segment.duration)
+        removed = max(0.0, segment.duration - kept)
+        action = "ще се скъси" if args.trim_silence and removed > 0 else "само отчет"
+        print(
+            f"  {index:02d}. {segment.start:9.3f}s -> {segment.end:9.3f}s "
+            f"({segment.duration:7.3f}s), keep {kept:.3f}s, remove {removed:.3f}s [{action}]"
+        )
+
+
+def classify_silence_segment_position(segment: SilenceSegment, segments: Sequence[SilenceSegment]) -> str:
+    """Класифицира silence сегмент като start/middle/end за отчетните keep стойности."""
+
+    if segments and segment is segments[0] and segment.start <= 0.05:
+        return "start"
+    if segments and segment is segments[-1]:
+        return "end"
+    return "middle"
+
+
+def should_trim_silence_position(position: str, scope: str) -> bool:
+    """Проверява дали даден тип pause segment се обработва според избрания scope."""
+
+    return scope == "all" or scope == position or (scope == "edges" and position in {"start", "end"})
+
+
+def build_removed_silence_ranges(
+    segments: Sequence[SilenceSegment],
+    args: argparse.Namespace,
+) -> list[TimeRange]:
+    """Преобразува silence сегменти в диапазони, които трябва да бъдат изрязани."""
+
+    removed: list[TimeRange] = []
+    for segment in segments:
+        position = classify_silence_segment_position(segment, segments)
+        if not should_trim_silence_position(position, args.trim_silence_scope):
+            continue
+
+        keep = min(resolve_keep_silence(args, position), segment.duration)
+        if keep >= segment.duration:
+            continue
+
+        if position == "start":
+            start = segment.start
+            end = segment.end - keep
+        elif position == "end":
+            start = segment.start + keep
+            end = segment.end
+        else:
+            left_keep = keep / 2
+            right_keep = keep - left_keep
+            start = segment.start + left_keep
+            end = segment.end - right_keep
+
+        if end > start:
+            removed.append(TimeRange(start=start, end=end))
+
+    return removed
+
+
+def build_kept_time_ranges(duration: float, removed_ranges: Sequence[TimeRange]) -> list[TimeRange]:
+    """Връща комплемента на removed ranges като запазени time ranges."""
+
+    kept: list[TimeRange] = []
+    cursor = 0.0
+    for removed in sorted(removed_ranges, key=lambda item: item.start):
+        start = max(0.0, min(duration, removed.start))
+        end = max(0.0, min(duration, removed.end))
+        if start > cursor:
+            kept.append(TimeRange(cursor, start))
+        cursor = max(cursor, end)
+    if cursor < duration:
+        kept.append(TimeRange(cursor, duration))
+    return [item for item in kept if item.duration > 0.001]
+
+
+def resolve_silence_trim_engine(args: argparse.Namespace, input_path: Path) -> str:
+    """Избира silenceremove или concat engine според опциите и типа вход."""
+
+    if not args.trim_silence:
+        return "none"
+    if args.silence_trim_engine != "auto":
+        return args.silence_trim_engine
+    if has_stream(input_path, "video") and not args.no_video_copy:
+        return "concat"
+    if args.cut_transition != "none" or args.video_cut_transition not in {"match", "none"}:
+        return "concat"
+    return "silenceremove"
+
+
+def resolve_video_transition(args: argparse.Namespace) -> str:
+    """Определя video transition режима, когато се реже видео."""
+
+    if args.video_cut_transition == "match":
+        return args.cut_transition
+    return args.video_cut_transition
+
+
+def clamp_fade_duration(duration: float, ranges: Sequence[TimeRange]) -> float:
+    """Ограничава fade duration така, че да не е по-дълъг от кратък сегмент."""
+
+    if duration <= 0 or not ranges:
+        return 0.0
+    shortest = min(item.duration for item in ranges)
+    return max(0.0, min(duration, shortest / 3))
+
+
+def format_seconds(value: float) -> str:
+    """Форматира секунди за FFmpeg filters с millisecond точност."""
+
+    return f"{value:.6f}".rstrip("0").rstrip(".") or "0"
 
 
 def analyze_channel_peak(input_path: Path, channel_index: int) -> float:
@@ -1087,7 +1441,13 @@ def analyze_audio_file(input_path: Path, args: argparse.Namespace) -> AudioAnaly
         args.lra_target,
         args.analysis_seconds,
     )
-    silence_segments, silence_ratio = detect_silence_segments(input_path, technical.duration, args.analysis_seconds)
+    silence_segments, silence_ratio = detect_silence_segments(
+        input_path,
+        technical.duration,
+        args.analysis_seconds,
+        args.silence_threshold,
+        args.silence_duration,
+    )
     spectral_bands = analyze_spectral_bands(input_path, args.analysis_seconds)
     spectral_relative = relative_band_levels(spectral_bands, volume_stats.get("mean_volume_db"))
 
@@ -1105,7 +1465,7 @@ def analyze_audio_file(input_path: Path, args: argparse.Namespace) -> AudioAnaly
         loudness_range_lu=loudnorm_stats.get("input_lra"),
         loudness_threshold_lufs=loudnorm_stats.get("input_thresh"),
         silence_ratio=silence_ratio,
-        silence_segments=silence_segments,
+        silence_segments=len(silence_segments),
         channel_peaks_db=channel_peaks,
         spectral_bands_db=spectral_bands,
         spectral_relative_db=spectral_relative,
@@ -1380,12 +1740,273 @@ def collect_eq_filters(args: argparse.Namespace) -> list[str]:
     return filters
 
 
+def build_silence_trim_filter(args: argparse.Namespace) -> str:
+    """Създава FFmpeg silenceremove filter за скъсяване на дълги паузи."""
+
+    threshold = f"{args.silence_threshold:g}dB"
+    duration = f"{args.silence_duration:g}"
+    keep_start = resolve_keep_silence(args, "start")
+    keep_middle = resolve_keep_silence(args, "middle")
+    keep_end = resolve_keep_silence(args, "end")
+    window = f"{args.silence_window:g}"
+    scope = args.trim_silence_scope
+    start_periods = 1 if scope in {"all", "edges", "start"} else 0
+    if scope == "all":
+        stop_periods = -1
+        stop_keep = keep_middle
+    elif scope == "middle":
+        stop_periods = -1
+        stop_keep = keep_middle
+        print(
+            "Предупреждение: --trim-silence-scope middle използва FFmpeg silenceremove с повторяем stop режим. "
+            "Това е подходящо за вътрешни паузи, но може да засегне и крайна тишина."
+        )
+    elif scope in {"edges", "end"}:
+        stop_periods = 1
+        stop_keep = keep_end
+    else:
+        stop_periods = 0
+        stop_keep = keep_middle
+
+    parts = [f"silenceremove=start_periods={start_periods}"]
+    if start_periods:
+        parts.extend(
+            [
+                f"start_duration={duration}",
+                f"start_threshold={threshold}",
+                f"start_silence={keep_start:g}",
+                f"start_mode={args.silence_channel_mode}",
+            ]
+        )
+
+    parts.append(f"stop_periods={stop_periods}")
+    if stop_periods:
+        parts.extend(
+            [
+                f"stop_duration={duration}",
+                f"stop_threshold={threshold}",
+                f"stop_silence={stop_keep:g}",
+                f"stop_mode={args.silence_channel_mode}",
+            ]
+        )
+
+    parts.extend([f"detection={args.silence_detection}", f"window={window}"])
+    return ":".join(parts)
+
+
+def resolve_keep_silence(args: argparse.Namespace, position: str) -> float:
+    """Връща keep-silence стойност за start/middle/end с fallback към --keep-silence."""
+
+    attribute = {
+        "start": "keep_start_silence",
+        "middle": "keep_middle_silence",
+        "end": "keep_end_silence",
+    }[position]
+    value = getattr(args, attribute, None)
+    return args.keep_silence if value is None else value
+
+
+def segment_audio_filter(
+    index: int,
+    time_range: TimeRange,
+    audio_filters: Sequence[str],
+    args: argparse.Namespace,
+    fade_duration: float,
+    transition: str,
+    total_segments: int,
+) -> str:
+    """Създава filter_complex част за един audio segment."""
+
+    filters = [
+        f"[0:a:0]atrim=start={format_seconds(time_range.start)}:end={format_seconds(time_range.end)}",
+        "asetpts=PTS-STARTPTS",
+    ]
+    filters.extend(audio_filters)
+    if transition == "fade" and fade_duration > 0:
+        if index > 0:
+            filters.append(f"afade=t=in:st=0:d={format_seconds(fade_duration)}:curve={args.cut_fade_curve}")
+        if index < total_segments - 1:
+            start = max(0.0, time_range.duration - fade_duration)
+            filters.append(
+                f"afade=t=out:st={format_seconds(start)}:d={format_seconds(fade_duration)}:curve={args.cut_fade_curve}"
+            )
+    return ",".join(filters) + f"[a{index}]"
+
+
+def segment_video_filter(
+    index: int,
+    time_range: TimeRange,
+    args: argparse.Namespace,
+    fade_duration: float,
+    transition: str,
+    total_segments: int,
+) -> str:
+    """Създава filter_complex част за един video segment."""
+
+    filters = [
+        f"[0:v:0]trim=start={format_seconds(time_range.start)}:end={format_seconds(time_range.end)}",
+        "setpts=PTS-STARTPTS",
+    ]
+    if transition == "fade" and fade_duration > 0:
+        if index > 0:
+            filters.append(f"fade=t=in:st=0:d={format_seconds(fade_duration)}")
+        if index < total_segments - 1:
+            start = max(0.0, time_range.duration - fade_duration)
+            filters.append(f"fade=t=out:st={format_seconds(start)}:d={format_seconds(fade_duration)}")
+    return ",".join(filters) + f"[v{index}]"
+
+
+def build_acrossfade_chain(segment_count: int, fade_duration: float, curve: str) -> tuple[list[str], str]:
+    """Създава FFmpeg acrossfade chain за audio segments."""
+
+    if segment_count == 1:
+        return [], "[a0]"
+
+    commands: list[str] = []
+    previous = "[a0]"
+    for index in range(1, segment_count):
+        output = f"[ac{index}]"
+        commands.append(
+            f"{previous}[a{index}]"
+            f"acrossfade=d={format_seconds(fade_duration)}:c1={curve}:c2={curve}"
+            f"{output}"
+        )
+        previous = output
+    return commands, previous
+
+
+def build_xfade_chain(ranges: Sequence[TimeRange], fade_duration: float) -> tuple[list[str], str]:
+    """Създава FFmpeg xfade chain за video segments."""
+
+    if len(ranges) == 1:
+        return [], "[v0]"
+
+    commands: list[str] = []
+    previous = "[v0]"
+    accumulated_duration = ranges[0].duration
+    for index in range(1, len(ranges)):
+        output = f"[vx{index}]"
+        offset = max(0.0, accumulated_duration - fade_duration)
+        commands.append(
+            f"{previous}[v{index}]"
+            f"xfade=transition=fade:duration={format_seconds(fade_duration)}:offset={format_seconds(offset)}"
+            f"{output}"
+        )
+        previous = output
+        accumulated_duration = accumulated_duration + ranges[index].duration - fade_duration
+    return commands, previous
+
+
+def build_concat_filter_complex(
+    ranges: Sequence[TimeRange],
+    audio_filters: Sequence[str],
+    args: argparse.Namespace,
+    include_video: bool,
+) -> tuple[str, str, str | None]:
+    """Създава filter_complex за concat trim с optional audio/video transition-и."""
+
+    fade_duration = clamp_fade_duration(args.cut_fade_duration, ranges)
+    audio_transition = args.cut_transition if fade_duration > 0 else "none"
+    video_transition = resolve_video_transition(args) if fade_duration > 0 else "none"
+    commands: list[str] = []
+
+    for index, time_range in enumerate(ranges):
+        commands.append(segment_audio_filter(index, time_range, audio_filters, args, fade_duration, audio_transition, len(ranges)))
+        if include_video:
+            commands.append(segment_video_filter(index, time_range, args, fade_duration, video_transition, len(ranges)))
+
+    if audio_transition == "crossfade" and len(ranges) > 1:
+        audio_chain, audio_label = build_acrossfade_chain(len(ranges), fade_duration, args.cut_fade_curve)
+        commands.extend(audio_chain)
+    else:
+        audio_inputs = "".join(f"[a{index}]" for index in range(len(ranges)))
+        audio_label = "[aout]"
+        commands.append(f"{audio_inputs}concat=n={len(ranges)}:v=0:a=1{audio_label}")
+
+    video_label: str | None = None
+    if include_video:
+        if video_transition == "crossfade" and len(ranges) > 1:
+            video_chain, video_label = build_xfade_chain(ranges, fade_duration)
+            commands.extend(video_chain)
+        else:
+            video_inputs = "".join(f"[v{index}]" for index in range(len(ranges)))
+            video_label = "[vout]"
+            commands.append(f"{video_inputs}concat=n={len(ranges)}:v=1:a=0{video_label}")
+
+    return ";".join(commands), audio_label, video_label
+
+
+def build_concat_trim_command(
+    input_path: Path,
+    output_path: Path,
+    ranges: Sequence[TimeRange],
+    audio_filters: Sequence[str],
+    args: argparse.Namespace,
+) -> list[str]:
+    """Създава FFmpeg команда за concat-based silence trim със синхронно audio/video рязане."""
+
+    include_video = has_stream(input_path, "video") and not args.no_video_copy
+    filter_complex, audio_label, video_label = build_concat_filter_complex(ranges, audio_filters, args, include_video)
+    codec = choose_audio_codec(output_path, args.audio_codec, include_video)
+    command = ["ffmpeg", "-hide_banner", "-y" if args.overwrite else "-n", "-i", str(input_path), "-filter_complex", filter_complex]
+
+    if include_video and video_label:
+        command += ["-map", video_label, "-map", audio_label, "-c:v", "libx264", "-c:a", codec]
+    else:
+        command += ["-map", audio_label, "-vn", "-c:a", codec]
+
+    if args.sample_rate:
+        command += ["-ar", str(args.sample_rate)]
+    if args.bitrate:
+        command += ["-b:a", args.bitrate]
+
+    command.append(str(output_path))
+    return command
+
+
+def apply_concat_silence_trim(
+    input_path: Path,
+    output_path: Path,
+    audio_filters: Sequence[str],
+    args: argparse.Namespace,
+) -> None:
+    """Прилага concat-based silence trim, нужен за fade/crossfade и video sync."""
+
+    technical = get_audio_technical_info(input_path)
+    if not technical.duration:
+        raise SystemExit("Concat silence trim изисква известна продължителност на входния файл.")
+
+    silence_segments, silence_ratio = detect_silence_segments(
+        input_path,
+        technical.duration,
+        args.analysis_seconds,
+        args.silence_threshold,
+        args.silence_duration,
+    )
+    print_silence_report(input_path, silence_segments, silence_ratio, args)
+    removed_ranges = build_removed_silence_ranges(silence_segments, args)
+    kept_ranges = build_kept_time_ranges(technical.duration, removed_ranges)
+    if not removed_ranges or len(kept_ranges) == 1:
+        print("Concat silence trim: няма паузи за изрязване; прилага се само pre-normalization filter stage.")
+        apply_eq_filters(input_path, output_path, audio_filters, args)
+        return
+
+    print("Concat silence trim: запазени сегменти:")
+    for index, time_range in enumerate(kept_ranges, start=1):
+        print(f"  {index:02d}. {time_range.start:.3f}s -> {time_range.end:.3f}s ({time_range.duration:.3f}s)")
+
+    command = build_concat_trim_command(input_path, output_path, kept_ranges, audio_filters, args)
+    run_command(command, dry_run=args.dry_run)
+
+
 def collect_pre_normalization_filters(
     input_path: Path,
     args: argparse.Namespace,
     eq_filters: Sequence[str],
+    *,
+    include_silenceremove: bool = True,
 ) -> list[str]:
-    """Създава filter chain за етапа преди финалната нормализация: balance -> EQ/филтри."""
+    """Създава filter chain преди нормализация: balance -> EQ/филтри -> silence trim."""
     filters: list[str] = []
     if args.balance_channels:
         if args.dry_run:
@@ -1399,6 +2020,8 @@ def collect_pre_normalization_filters(
                 filters.append(balance_filter)
 
     filters.extend(eq_filters)
+    if args.trim_silence and include_silenceremove:
+        filters.append(build_silence_trim_filter(args))
     return filters
 
 
@@ -1579,6 +2202,29 @@ def main() -> int:
 
     if not has_stream(input_path, "audio"):
         raise SystemExit(f"Не е открит audio stream във входа: {input_path}")
+    silence_trim_engine = resolve_silence_trim_engine(args, input_path)
+    if args.trim_silence and silence_trim_engine == "silenceremove":
+        if has_stream(input_path, "video") and not args.no_video_copy:
+            raise SystemExit(
+                "silenceremove trim при видео вход би разсинхронизирал аудио и видео. "
+                "Използвай --silence-trim-engine concat или --no-video-copy."
+            )
+        if args.cut_transition != "none" or resolve_video_transition(args) != "none":
+            raise SystemExit("Fade/crossfade transition-и изискват --silence-trim-engine concat.")
+
+    if args.analyze_silence:
+        technical = get_audio_technical_info(input_path)
+        silence_segments, silence_ratio = detect_silence_segments(
+            input_path,
+            technical.duration,
+            args.analysis_seconds,
+            args.silence_threshold,
+            args.silence_duration,
+        )
+        print_silence_report(input_path, silence_segments, silence_ratio, args)
+        if not (args.analyze_audio or args.recommend_processing or args.apply_recommendation):
+            print("Готово: анализът на тишина приключи без обработка на файл.")
+            return 0
 
     analysis: AudioAnalysis | None = None
     recommendation: AudioRecommendation | None = None
@@ -1622,18 +2268,24 @@ def main() -> int:
         content_type_for_normalization = analysis.detected_content_type
 
     eq_filters = recommended_filters + eq_filters
-    pre_filters = collect_pre_normalization_filters(input_path, args, eq_filters)
+    pre_filters = collect_pre_normalization_filters(
+        input_path,
+        args,
+        eq_filters,
+        include_silenceremove=silence_trim_engine == "silenceremove",
+    )
 
-    if not pre_filters:
+    has_concat_trim = args.trim_silence and silence_trim_engine == "concat"
+    if not pre_filters and not has_concat_trim:
         if args.balance_channels:
             print("Не е приложен channel balance и не е избран EQ; прилагам само финална нормализация.")
         else:
-            print("Не е избран EQ/channel balance; прилагам само финална нормализация.")
+            print("Не е избран EQ/channel balance/silence trim; прилагам само финална нормализация.")
         apply_final_normalization(input_path, output_path, content_type_for_normalization, args)
         print("Готово.")
         return 0
 
-    print("Ред на обработка: channel balance -> филтри/EQ -> финална нормализация.")
+    print("Ред на обработка: channel balance -> филтри/EQ -> silence trim -> финална нормализация.")
     with tempfile.TemporaryDirectory(prefix="audio_peak_eq_") as temp_dir:
         temp_suffix = output_path.suffix if has_stream(input_path, "video") else ".wav"
         temp_path = Path(temp_dir) / f"pre_normalize_stage{temp_suffix}"
@@ -1641,7 +2293,10 @@ def main() -> int:
         stage_args.overwrite = True
 
         print(f"Временен pre-normalization файл: {temp_path}")
-        apply_eq_filters(input_path, temp_path, pre_filters, stage_args)
+        if has_concat_trim:
+            apply_concat_silence_trim(input_path, temp_path, pre_filters, stage_args)
+        else:
+            apply_eq_filters(input_path, temp_path, pre_filters, stage_args)
         apply_final_normalization(temp_path, output_path, content_type_for_normalization, args)
 
         if args.keep_temp and not args.dry_run:

@@ -124,6 +124,73 @@ def test_build_channel_balance_filter_skips_non_stereo_in_stereo_mode(audio_peak
     assert audio_peak_eq.build_channel_balance_filter([-3.0, -6.0, -9.0], threshold=0.25, mode="stereo") is None
 
 
+def test_parse_silencedetect_output(audio_peak_eq) -> None:
+    output = (
+        "[silencedetect @ 0x1] silence_start: 1.25\n"
+        "[silencedetect @ 0x1] silence_end: 3.75 | silence_duration: 2.5\n"
+    )
+
+    segments = audio_peak_eq.parse_silencedetect_output(output)
+
+    assert len(segments) == 1
+    assert segments[0].start == 1.25
+    assert segments[0].end == 3.75
+    assert segments[0].duration == 2.5
+
+
+def test_build_silence_trim_filter(audio_peak_eq) -> None:
+    silence_filter = audio_peak_eq.build_silence_trim_filter(
+        argparse.Namespace(
+            silence_threshold=-45,
+            silence_duration=2.0,
+            keep_silence=0.4,
+            trim_silence_scope="all",
+            keep_start_silence=None,
+            keep_middle_silence=None,
+            keep_end_silence=None,
+            silence_channel_mode="all",
+            silence_detection="rms",
+            silence_window=0.02,
+        )
+    )
+
+    assert silence_filter.startswith("silenceremove=start_periods=1")
+    assert "start_threshold=-45dB" in silence_filter
+    assert "stop_periods=-1" in silence_filter
+    assert "stop_silence=0.4" in silence_filter
+    assert "detection=rms" in silence_filter
+
+
+def test_build_silence_trim_filter_scopes(audio_peak_eq) -> None:
+    base = {
+        "silence_threshold": -50,
+        "silence_duration": 3.0,
+        "keep_silence": 0.4,
+        "keep_start_silence": 0.2,
+        "keep_middle_silence": 0.3,
+        "keep_end_silence": 0.8,
+        "silence_channel_mode": "all",
+        "silence_detection": "rms",
+        "silence_window": 0.02,
+    }
+
+    edges = audio_peak_eq.build_silence_trim_filter(argparse.Namespace(**base, trim_silence_scope="edges"))
+    assert "start_periods=1" in edges
+    assert "start_silence=0.2" in edges
+    assert "stop_periods=1" in edges
+    assert "stop_silence=0.8" in edges
+
+    start = audio_peak_eq.build_silence_trim_filter(argparse.Namespace(**base, trim_silence_scope="start"))
+    assert "start_periods=1" in start
+    assert "stop_periods=0" in start
+    assert "stop_silence" not in start
+
+    end = audio_peak_eq.build_silence_trim_filter(argparse.Namespace(**base, trim_silence_scope="end"))
+    assert "start_periods=0" in end
+    assert "stop_periods=1" in end
+    assert "stop_silence=0.8" in end
+
+
 def test_channel_count_and_peak_analysis_for_stereo_fixture(audio_peak_eq, tmp_path: Path) -> None:
     input_wav = make_imbalanced_stereo_wav(tmp_path / "imbalanced.wav")
 

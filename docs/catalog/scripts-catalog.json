@@ -257,7 +257,7 @@
       "status": "active",
       "entrypoint": true,
       "no_path": false,
-      "description": "Инструмент за Linux за channel balance, peak-базирано усилване и EQ обработка чрез FFmpeg филтри.",
+      "description": "Инструмент за Linux за анализ, channel balance, EQ обработка и нормализация чрез FFmpeg филтри.",
       "help_command": "audio_peak_eq --help",
       "markers": [
         "scripts-toolbox: entrypoint"

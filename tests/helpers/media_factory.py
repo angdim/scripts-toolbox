@@ -49,6 +49,40 @@ def make_imbalanced_stereo_wav(path: Path, *, duration: float = 0.5) -> Path:
     return path
 
 
+def make_sine_silence_sine_wav(
+    path: Path,
+    *,
+    tone_duration: float = 0.25,
+    silence_duration: float = 1.0,
+) -> Path:
+    """Create a WAV fixture with tone, silence, tone."""
+    run_command(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency=600:duration={tone_duration}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"anullsrc=r=44100:cl=mono:d={silence_duration}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency=600:duration={tone_duration}",
+            "-filter_complex",
+            "[0:a][1:a][2:a]concat=n=3:v=0:a=1",
+            str(path),
+        ],
+        check=True,
+        timeout=90,
+    )
+    return path
+
+
 def make_test_mp4(path: Path, *, duration: float = 0.5) -> Path:
     """Create a tiny MP4 fixture with one video stream and one audio stream."""
     run_command(
@@ -71,5 +105,51 @@ def make_test_mp4(path: Path, *, duration: float = 0.5) -> Path:
         ],
         check=True,
         timeout=90,
+    )
+    return path
+
+
+def make_test_mp4_with_audio_silence(
+    path: Path,
+    *,
+    tone_duration: float = 0.25,
+    silence_duration: float = 1.0,
+) -> Path:
+    """Create a tiny MP4 with continuous video and tone/silence/tone audio."""
+    total_duration = tone_duration * 2 + silence_duration
+    run_command(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"testsrc=size=160x120:rate=25:duration={total_duration}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency=600:duration={tone_duration}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"anullsrc=r=44100:cl=mono:d={silence_duration}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency=600:duration={tone_duration}",
+            "-filter_complex",
+            "[1:a][2:a][3:a]concat=n=3:v=0:a=1[a]",
+            "-map",
+            "0:v",
+            "-map",
+            "[a]",
+            "-shortest",
+            "-pix_fmt",
+            "yuv420p",
+            str(path),
+        ],
+        check=True,
+        timeout=120,
     )
     return path
